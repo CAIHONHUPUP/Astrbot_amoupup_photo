@@ -4066,7 +4066,6 @@ class OmniDrawPlugin(Star):
         except RuntimeError as exc:
             yield event.plain_result(f"{MessageEmoji.WARNING} {exc}")
 
-    @llm_tool(name="generate_selfie")
     def _selfie_turn_store(self):
         store = getattr(self, "_selfie_last_ok", None)
         if not isinstance(store, dict):
@@ -4089,6 +4088,7 @@ class OmniDrawPlugin(Star):
         umo = str(getattr(event, "unified_msg_origin", "") or "")
         self._selfie_turn_store()[umo] = time.monotonic()
 
+    @llm_tool(name="generate_selfie")
     async def tool_generate_selfie(
         self,
         event: AstrMessageEvent,
