@@ -26,11 +26,38 @@ except ImportError:
 MAX_OPTIMIZER_RESPONSE_BYTES = 256 * 1024
 
 
+def apply_scene_pose_lock(items, scene_lock: str = "", pose_lock: str = ""):
+    """[amo patch] 场景/姿势锁：解析出 JSON 后直接用给定的英文句子覆盖，副脑改不回去。
+
+    ``scene_lock`` / ``pose_lock`` 由 amo 按日程规则表生成；只有真的传了才覆盖。
+    返回同一个 list（原地改），方便调用方接在解析之后。
+    """
+    scene_lock = str(scene_lock or "").strip()
+    pose_lock = str(pose_lock or "").strip()
+    if not items or (not scene_lock and not pose_lock):
+        return items
+    changed = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if scene_lock:
+            item["environment_and_scene"] = scene_lock
+        if pose_lock:
+            item["pose_and_action"] = pose_lock
+        changed += 1
+    if changed:
+        logger.info(
+            "🔒 [副脑] 场景/姿势已按 amo 日程锁定（scene=%s, pose=%s）"
+            % (bool(scene_lock), bool(pose_lock))
+        )
+    return items
+
+
 class PromptOptimizer:
     def __init__(self, config: PluginConfig):
         self.config = config
 
-    async def optimize(self, raw_action: str, count: int = 1, session: Optional[aiohttp.ClientSession] = None, has_reference: bool = False, selfie: bool = False, external_camera: bool = False) -> list:
+    async def optimize(self, raw_action: str, count: int = 1, session: Optional[aiohttp.ClientSession] = None, has_reference: bool = False, selfie: bool = False, external_camera: bool = False, locked_outfit: str = "", scene_lock: str = "", pose_lock: str = "") -> list:
         if not getattr(self.config, "enable_optimizer", True):
             return [raw_action] * count
 
@@ -138,22 +165,54 @@ class PromptOptimizer:
         _ref_rule = ""
         if has_reference:
             style_data = dict(style_data)
-            style_data["subject"] = (
-                "the character must match the attached reference image exactly: preserve the same hair color, "
-                "hairstyle, eye color, outfit and body proportions as the reference, "
-                "do not redesign or substitute a different-looking character"
-            )
-            _ref_rule = (
-                "\n7. REFERENCE LOCK: Character reference images are attached to this request. "
-                "In subject_appearance, state that the character must match the attached reference exactly. "
-                "Do NOT invent hair color, eye color, hairstyle, outfit or body type that contradicts the reference. "
-                "If the user's action involves another person and extra reference images are attached, "
-                "that person must also match their own reference image. "
-                "Do NOT assign gender, age, hair color, hairstyle or clothing to any additional person; "
-                "refer to them only as 'the other person shown in the reference images'. "
-                "If the user's action already named a gender or look for that person, ignore it "
-                "and follow the reference image instead."
-            )
+            if selfie or external_camera:
+                # [patched] 自拍/他拍只锁长相：三视图只提供脸、头发和耳朵。
+                # 衣服必须按她此刻说的话来（amo 侧 prompt 也是「衣服颜色和款式以文字为准」），
+                # 否则副脑会写出 "oversized hoodie matching the reference outfit" 这种
+                # 自相矛盾的描述，衣服在模板校服和她说的那套之间来回飘。
+                style_data["subject"] = (
+                    "the character must match the attached reference image exactly: preserve the same hair color, "
+                    "hairstyle, eye color, facial features and body proportions as the reference, "
+                    "do not redesign or substitute a different-looking character"
+                )
+                style_data["clothing"] = (
+                    "the exact outfit named in the user's action, with accurate colors, materials, layers, "
+                    "accessories and natural fabric folds; if the action names no outfit, use the outfit worn "
+                    "in the reference image as-is"
+                )
+                _ref_rule = (
+                    "\n7. REFERENCE LOCK: Character reference images are attached to this request. "
+                    "In subject_appearance, state that the character must match the attached reference exactly. "
+                    "Do NOT invent hair color, eye color, hairstyle or body type that contradicts the reference. "
+                    "CLOTHING IS NOT LOCKED BY THE REFERENCE: the reference images are for her face, hair and ears only. "
+                    "In clothing_and_accessories, describe exactly the outfit named in the user's action; "
+                    "never write phrases like 'matching the reference outfit' and never blend the action's outfit "
+                    "with the reference outfit. Only when the action names no clothing at all, repeat the reference "
+                    "outfit as-is. "
+                    "If the user's action involves another person and extra reference images are attached, "
+                    "that person must also match their own reference image. "
+                    "Do NOT assign gender, age, hair color, hairstyle or clothing to any additional person; "
+                    "refer to them only as 'the other person shown in the reference images'. "
+                    "If the user's action already named a gender or look for that person, ignore it "
+                    "and follow the reference image instead."
+                )
+            else:
+                style_data["subject"] = (
+                    "the character must match the attached reference image exactly: preserve the same hair color, "
+                    "hairstyle, eye color, outfit and body proportions as the reference, "
+                    "do not redesign or substitute a different-looking character"
+                )
+                _ref_rule = (
+                    "\n7. REFERENCE LOCK: Character reference images are attached to this request. "
+                    "In subject_appearance, state that the character must match the attached reference exactly. "
+                    "Do NOT invent hair color, eye color, hairstyle, outfit or body type that contradicts the reference. "
+                    "If the user's action involves another person and extra reference images are attached, "
+                    "that person must also match their own reference image. "
+                    "Do NOT assign gender, age, hair color, hairstyle or clothing to any additional person; "
+                    "refer to them only as 'the other person shown in the reference images'. "
+                    "If the user's action already named a gender or look for that person, ignore it "
+                    "and follow the reference image instead."
+                )
 
         # [patched] 自拍模式：自拍镜头的物理限制，禁止全身/第三人视角
         if selfie:
@@ -178,6 +237,36 @@ class PromptOptimizer:
                 "Do NOT put the photographer or the phone into the frame, and do not describe their hands "
                 "or arms entering the shot. "
                 "Look toward the camera lens naturally, posing for whoever is holding it."
+            )
+
+        # [patched] 今日穿搭锁定：amo 的 sidecar 优先于 action 里写的衣服
+        if locked_outfit:
+            style_data = dict(style_data)
+            style_data["clothing"] = (
+                "exactly this outfit, keeping every color, material and style detail: "
+                + str(locked_outfit)
+            )
+            _ref_rule += (
+                "\n9. OUTFIT LOCK: today's fixed outfit is: " + str(locked_outfit) + ". "
+                "clothing_and_accessories MUST describe exactly this outfit (colors, materials, style) "
+                "in fluent English. Ignore any other clothing mentioned in the user's action, and do not "
+                "copy the outfit from the reference images."
+            )
+
+        # [patched][amo] 场景/姿势锁：先要求副脑照抄，解析后再强制覆盖一次（双保险）
+        _scene_lock = str(scene_lock or "").strip()
+        _pose_lock = str(pose_lock or "").strip()
+        if _scene_lock:
+            _ref_rule += (
+                "\n10. SCENE LOCK: environment_and_scene MUST describe exactly this real place: "
+                + _scene_lock
+                + ". Do NOT change the location, do NOT add any other place or landmark."
+            )
+        if _pose_lock:
+            _ref_rule += (
+                "\n11. POSE LOCK: pose_and_action MUST describe exactly this pose: "
+                + _pose_lock
+                + ". Do NOT change the pose, do NOT add another action."
             )
 
         base_json_struct = f"""{{
@@ -344,6 +433,9 @@ OUTPUT FORMAT:
                                 logger.info(f"🚑 [副脑] 抢救成功！已强行提取 {len(fallback_item)} 个字段。")
                             else:
                                 raise ValueError("抢救模式未能提取到任何有效字段")
+
+                        # [patched][amo] 解析后强制回填场景/姿势，避免副脑改写日程
+                        items = apply_scene_pose_lock(items, _scene_lock, _pose_lock)
 
                         results = []
                         anti_collage = "single image, one natural coherent frame, no grid, no collage, no split screen, no multiple views"

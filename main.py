@@ -3047,6 +3047,8 @@ class OmniDrawPlugin(Star):
         use_gif: bool = False,
         frame_count: int = 9,
         frame_duration_ms: int = 200,
+        scene_lock: str = "",
+        pose_lock: str = "",
     ) -> Dict[str, Any]:
         request_options = self._image_request_options(
             extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms,
@@ -3071,7 +3073,10 @@ class OmniDrawPlugin(Star):
                 # The still-image optimizer enforces a frozen moment, which would erase GIF motion.
                 optimized_actions = (
                     [prompt] * count if gif_requested
-                    else await self.prompt_optimizer.optimize(prompt, count, session=session)
+                    else await self.prompt_optimizer.optimize(
+                        prompt, count, session=session,
+                        scene_lock=scene_lock, pose_lock=pose_lock,
+                    )
                 )
                 optimized_actions = self._normalize_plugin_prompts(optimized_actions, prompt, count)
                 safe_refs = await self._process_and_save_images(raw_refs, session=session)
@@ -3110,6 +3115,29 @@ class OmniDrawPlugin(Star):
             "leased_result_paths": leased_result_paths,
         }
 
+    def _load_locked_outfit(self) -> str:
+        """读 amo 写入的今日穿搭（data_dir/amo_outfit.json），当天自拍都锁这一套。
+
+        文件不是今天的、或没有 text 就返回空串，完全不影响原来的自拍流程。
+        """
+        path = os.path.join(self.data_dir, "amo_outfit.json")
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            return ""
+        except Exception:
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        text = str(data.get("text") or "").strip()
+        day = str(data.get("day") or "").strip()
+        if not text:
+            return ""
+        if day and day != time.strftime("%Y-%m-%d"):
+            return ""
+        return text[:200]
+
     async def _run_selfie_generation(
         self,
         event: Optional[AstrMessageEvent],
@@ -3122,6 +3150,8 @@ class OmniDrawPlugin(Star):
         use_gif: bool = False,
         frame_count: int = 9,
         frame_duration_ms: int = 200,
+        scene_lock: str = "",
+        pose_lock: str = "",
     ) -> Dict[str, Any]:
         request_options = self._image_request_options(
             extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms,
@@ -3170,10 +3200,14 @@ class OmniDrawPlugin(Star):
                 # 只要有"别人/他物持机"的信号，就放开全身构图；否则一律按自拍处理。
                 _has_external_camera = any(h in _act_text for h in _external_camera_hints)
                 _is_self_shot = not _has_external_camera
+                # [patched] amo 当天锁定的穿搭：副脑会把它写成唯一的 clothing，别让 action 里的衣服带跑
+                locked_outfit = self._load_locked_outfit()
                 optimized_actions = [fallback_action] * count if gif_requested else await self.prompt_optimizer.optimize(
                     fallback_action, count, session=session,
                     has_reference=bool(target_refs), selfie=_is_self_shot,
                     external_camera=_has_external_camera,
+                    locked_outfit=locked_outfit,
+                    scene_lock=scene_lock, pose_lock=pose_lock,
                 )
                 optimized_actions = self._normalize_plugin_prompts(optimized_actions, fallback_action, count)
                 safe_refs = await self._process_and_save_images(target_refs, session=session)
@@ -3191,6 +3225,13 @@ class OmniDrawPlugin(Star):
                     _safe_ref_set = {os.path.abspath(str(ref)) for ref in safe_refs}
                     for optimized_action in optimized_actions:
                         final_prompt, kwargs = self.persona_manager.build_persona_prompt(optimized_action)
+                        if locked_outfit:
+                            # 最后再钉一遍：副脑万一还是写了别的衣服，图像模型以这句为准
+                            final_prompt = (
+                                final_prompt.rstrip(", ")
+                                + ", she is wearing exactly: " + locked_outfit
+                                + "; today's outfit is fixed and must not be changed or replaced"
+                            )
                         if safe_refs:
                             kwargs["user_refs"] = safe_refs
                             _persona_first = kwargs.get("persona_ref")
@@ -3280,6 +3321,8 @@ class OmniDrawPlugin(Star):
         use_gif: bool = False,
         frame_count: int = 9,
         frame_duration_ms: int = 200,
+        scene_lock: str = "",
+        pose_lock: str = "",
     ) -> Dict[str, Any]:
         """Generate image(s) for another plugin and return serializable image data.
 
@@ -3320,6 +3363,8 @@ class OmniDrawPlugin(Star):
                     use_gif=use_gif,
                     frame_count=frame_count,
                     frame_duration_ms=frame_duration_ms,
+                    scene_lock=scene_lock,
+                    pose_lock=pose_lock,
                 )
             else:
                 generation = await self._run_text2img_generation(
@@ -3333,6 +3378,8 @@ class OmniDrawPlugin(Star):
                     use_gif=use_gif,
                     frame_count=frame_count,
                     frame_duration_ms=frame_duration_ms,
+                    scene_lock=scene_lock,
+                    pose_lock=pose_lock,
                 )
 
             response, valid_results = self._plugin_generation_response(generation)
@@ -4020,6 +4067,28 @@ class OmniDrawPlugin(Star):
             yield event.plain_result(f"{MessageEmoji.WARNING} {exc}")
 
     @llm_tool(name="generate_selfie")
+    def _selfie_turn_store(self):
+        store = getattr(self, "_selfie_last_ok", None)
+        if not isinstance(store, dict):
+            store = {}
+            self._selfie_last_ok = store
+        return store
+
+    def _selfie_duplicate_notice(self, event, window=30.0):
+        """同一会话 30 秒内已经成功发过自拍时，拒绝重复生成（防模型连调两次）。"""
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        last = self._selfie_turn_store().get(umo)
+        if last is None:
+            return ""
+        if time.monotonic() - last < window:
+            logger.info("[OmniDraw] 同一轮重复调用 generate_selfie，已跳过（umo=%s）", umo[:48])
+            return "系统提示：这一轮已经生成并下发过一张了，不重复生成；要换姿势请说明再发。"
+        return ""
+
+    def _mark_selfie_sent(self, event):
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        self._selfie_turn_store()[umo] = time.monotonic()
+
     async def tool_generate_selfie(
         self,
         event: AstrMessageEvent,
@@ -4051,6 +4120,11 @@ class OmniDrawPlugin(Star):
             frame_duration_ms (int): use_gif=true 时每帧间隔毫秒，20 至 2000，默认 200。模型按 10ms 取整。
         """
         event = self._unwrap_tool_event(event)
+        if not self._plugin_bool(return_result, default=False):
+            # 同一轮里模型可能连调两次 generate_selfie：第二次直接拒掉，避免重复发图
+            duplicate = self._selfie_duplicate_notice(event)
+            if duplicate:
+                return duplicate
         permission_error = self._permission_denied_message(event)
         if permission_error:
             if self._plugin_bool(return_result, default=False):
@@ -4098,6 +4172,7 @@ class OmniDrawPlugin(Star):
                 raise RuntimeError(self._generation_failure_message(generation))
             sent = await self._send_generated_images(event, valid_results)
             self._complete_image_quota(event, reserved_count, sent)
+            self._mark_selfie_sent(event)
             return f"系统提示：已成功生成并下发了 {sent} 张图。"
         except asyncio.CancelledError:
             self._release_image_quota(event, reserved_count)
