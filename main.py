@@ -1125,6 +1125,7 @@ class OmniDrawPlugin(Star):
                 use_gif=self._plugin_bool(payload.get("use_gif"), default=False),
                 frame_count=payload.get("frame_count", 9),
                 frame_duration_ms=payload.get("frame_duration_ms", 200),
+                negative_prompt=str(payload.get("negative_prompt", "") or ""),
             )
             status_code = 200 if result.get("success") else 500
             return jsonify(result), status_code
@@ -3056,6 +3057,7 @@ class OmniDrawPlugin(Star):
         frame_duration_ms: int = 200,
         scene_lock: str = "",
         pose_lock: str = "",
+        negative_prompt: str = "",
     ) -> Dict[str, Any]:
         request_options = self._image_request_options(
             extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms,
@@ -3090,7 +3092,7 @@ class OmniDrawPlugin(Star):
                 leased_paths = self._lease_cache_paths(safe_refs)
 
                 kwargs = {"user_refs": safe_refs} if safe_refs else {}
-                negative_prompt = self._negative_prompt_for(prompt)
+                negative_prompt = str(negative_prompt or "").strip() or self._negative_prompt_for(prompt)
                 logger.info("[生图] 正向词：%s | 负向词：%s", prompt, negative_prompt or "（空）")
                 kwargs["negative_prompt"] = negative_prompt
                 kwargs.update(request_options)
@@ -3162,6 +3164,7 @@ class OmniDrawPlugin(Star):
         frame_duration_ms: int = 200,
         scene_lock: str = "",
         pose_lock: str = "",
+        negative_prompt: str = "",
     ) -> Dict[str, Any]:
         request_options = self._image_request_options(
             extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms,
@@ -3252,7 +3255,7 @@ class OmniDrawPlugin(Star):
                                 and os.path.abspath(str(_persona_first)) in _safe_ref_set
                             ):
                                 kwargs.pop("persona_ref", None)
-                        negative_prompt = self._negative_prompt_for(final_prompt, "selfie")
+                        negative_prompt = str(negative_prompt or "").strip() or self._negative_prompt_for(final_prompt, "selfie")
                         logger.info("[生图] 正向词：%s | 负向词：%s", final_prompt, negative_prompt or "（空）")
                         kwargs["negative_prompt"] = negative_prompt
                         kwargs.update(request_options)
@@ -3336,6 +3339,7 @@ class OmniDrawPlugin(Star):
         frame_duration_ms: int = 200,
         scene_lock: str = "",
         pose_lock: str = "",
+        negative_prompt: str = "",
     ) -> Dict[str, Any]:
         """Generate image(s) for another plugin and return serializable image data.
 
@@ -3378,6 +3382,7 @@ class OmniDrawPlugin(Star):
                     frame_duration_ms=frame_duration_ms,
                     scene_lock=scene_lock,
                     pose_lock=pose_lock,
+                    negative_prompt=negative_prompt,
                 )
             else:
                 generation = await self._run_text2img_generation(
@@ -3393,6 +3398,7 @@ class OmniDrawPlugin(Star):
                     frame_duration_ms=frame_duration_ms,
                     scene_lock=scene_lock,
                     pose_lock=pose_lock,
+                    negative_prompt=negative_prompt,
                 )
 
             response, valid_results = self._plugin_generation_response(generation)

@@ -53,24 +53,38 @@ def apply_scene_pose_lock(items, scene_lock: str = "", pose_lock: str = ""):
     return items
 
 
+def locked_prompt(raw_action: str, scene_lock: str = "", pose_lock: str = "") -> list:
+    """副脑关闭/未配置/超时时也要保住场景与姿势锁。
+
+    以前这些早退分支直接 return [raw_action] * count，amo 传进来的 scene_lock/pose_lock
+    全部丢掉，出图与日程不符，但 amo 日志还打印“已锁定”，看起来像生效。
+    """
+    text = str(raw_action or "").strip()
+    locks = [str(part or "").strip() for part in (scene_lock, pose_lock)]
+    locks = [part for part in locks if part and part not in text]
+    if locks:
+        text = (text + ", " + ", ".join(locks)) if text else ", ".join(locks)
+    return [text]
+
+
 class PromptOptimizer:
     def __init__(self, config: PluginConfig):
         self.config = config
 
     async def optimize(self, raw_action: str, count: int = 1, session: Optional[aiohttp.ClientSession] = None, has_reference: bool = False, selfie: bool = False, external_camera: bool = False, locked_outfit: str = "", scene_lock: str = "", pose_lock: str = "") -> list:
         if not getattr(self.config, "enable_optimizer", True):
-            return [raw_action] * count
+            return locked_prompt(raw_action, scene_lock, pose_lock) * count
 
         if not raw_action or raw_action.strip() == "":
-            return [raw_action] * count
+            return locked_prompt(raw_action, scene_lock, pose_lock) * count
 
         chain = self.config.chains.get("optimizer", [])
         provider = self.config.get_provider(chain[0]) if chain else (self.config.providers[0] if self.config.providers else None)
         if not provider or not provider.base_url:
-            return [raw_action] * count
+            return locked_prompt(raw_action, scene_lock, pose_lock) * count
         if provider.api_type == APIType.GEMINI_OFFICIAL:
             logger.warning("⚠️ [副脑] Gemini 官方节点不兼容 OpenAI Chat 优化协议，已跳过副脑优化。")
-            return [raw_action] * count
+            return locked_prompt(raw_action, scene_lock, pose_lock) * count
 
         endpoint = build_chat_completions_endpoint(provider.base_url)
         api_key = next_api_key(
@@ -79,7 +93,7 @@ class PromptOptimizer:
             scope=f"optimizer:{provider.api_type}:{provider.base_url}",
         )
         if not endpoint or not api_key:
-            return [raw_action] * count
+            return locked_prompt(raw_action, scene_lock, pose_lock) * count
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
         # ==========================================
@@ -397,6 +411,11 @@ OUTPUT FORMAT:
                                     items = prompt_data.get("results", [])
                             else:
                                 raise ValueError("副脑返回 JSON 不是对象或数组")
+                            # 模型常返回 {"results": ["..."]}：JSON 合法但元素不是对象，
+                            # 直接跳过 apply_scene_pose_lock → 锁静默失效。这里统一逼它走抢救分支。
+                            items = [item for item in items if isinstance(item, dict)]
+                            if not items:
+                                raise ValueError("副脑返回的数组里没有可用的对象字段")
                         except Exception as e:
                             logger.warning(f"⚠️ [副脑] 原生 JSON 解析失败, 启动无敌抢救模式... 错误: {e}")
                             fallback_item = {}
@@ -453,16 +472,17 @@ OUTPUT FORMAT:
                                 results.append(master_prompt)
 
                         while len(results) < count:
-                            results.append(results[0] if results else raw_action)
+                            results.append(results[0] if results
+                                           else locked_prompt(raw_action, _scene_lock, _pose_lock)[0])
 
                         logger.info(f"✨ [副脑] 成功重构并提取 {len(results[:count])} 组【{style_choice}】提示词！")
                         return results[:count]
 
             except Exception as e:
                 logger.warning(f"⚠️ [副脑降级] ({str(e)})")
-                return [raw_action] * count
+                return locked_prompt(raw_action, _scene_lock, _pose_lock) * count
 
-            return [raw_action] * count
+            return locked_prompt(raw_action, _scene_lock, _pose_lock) * count
         finally:
             if close_session and session_obj is not None:
                 await session_obj.close()
