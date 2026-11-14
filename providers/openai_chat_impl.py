@@ -30,6 +30,12 @@ class OpenAIChatProvider(BaseProvider):
             return ""
 
     async def generate_image(self, prompt: str, **kwargs: Any) -> str:
+        negative = str(kwargs.pop("negative_prompt", "") or "").strip()
+        try:
+            from ..core.negative_prompt import merge_negative
+        except ImportError:
+            from core.negative_prompt import merge_negative
+        prompt = merge_negative(prompt, negative)
         current_key = self.get_current_key()
         if not current_key:
             raise ValueError("节点未配置 API Key！")

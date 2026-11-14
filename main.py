@@ -3035,6 +3035,13 @@ class OmniDrawPlugin(Star):
             "prompt": prompt,
         }
 
+    def _negative_prompt_for(self, prompt: str, scene_type: str = "") -> str:
+        try:
+            from .core.negative_prompt import get_negative_prompt
+        except ImportError:
+            from core.negative_prompt import get_negative_prompt
+        return get_negative_prompt(self.plugin_config, scene_type, prompt)
+
     async def _run_text2img_generation(
         self,
         event: Optional[AstrMessageEvent],
@@ -3083,6 +3090,9 @@ class OmniDrawPlugin(Star):
                 leased_paths = self._lease_cache_paths(safe_refs)
 
                 kwargs = {"user_refs": safe_refs} if safe_refs else {}
+                negative_prompt = self._negative_prompt_for(prompt)
+                logger.info("[生图] 正向词：%s | 负向词：%s", prompt, negative_prompt or "（空）")
+                kwargs["negative_prompt"] = negative_prompt
                 kwargs.update(request_options)
 
                 try:
@@ -3242,6 +3252,9 @@ class OmniDrawPlugin(Star):
                                 and os.path.abspath(str(_persona_first)) in _safe_ref_set
                             ):
                                 kwargs.pop("persona_ref", None)
+                        negative_prompt = self._negative_prompt_for(final_prompt, "selfie")
+                        logger.info("[生图] 正向词：%s | 负向词：%s", final_prompt, negative_prompt or "（空）")
+                        kwargs["negative_prompt"] = negative_prompt
                         kwargs.update(request_options)
                         prompts.append(final_prompt)
                         tasks.append(chain_manager.run_chain_with_metadata(chain_to_use, final_prompt, **kwargs))

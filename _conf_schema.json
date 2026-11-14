@@ -1,4 +1,31 @@
 {
+  "image_generation": {
+    "description": "负面提示词",
+    "type": "object",
+    "hint": "生图时自动附带；API 不支持独立负面参数时会作为自然语言追加到正向提示词末尾。",
+    "items": {
+      "negative_prompt_enabled": {
+        "description": "启用负面提示词",
+        "type": "bool",
+        "default": true
+      },
+      "base_negative": {
+        "description": "通用负面词",
+        "type": "text",
+        "default": "人物, 人类, 文字, 水印, 签名, 二次元, 插画, 畸形, 多余的肢体, 模糊, 低画质"
+      },
+      "room_negative": {
+        "description": "房间场景追加负面词",
+        "type": "text",
+        "default": "拥挤, 杂乱无章, 地板悬空, 墙壁破损"
+      },
+      "item_negative": {
+        "description": "衣服/物品场景追加负面词",
+        "type": "text",
+        "default": "穿模, 不对称, 背景杂乱"
+      }
+    }
+  },
   "permission_config": {
     "description": "权限与额度豁免",
     "type": "object",

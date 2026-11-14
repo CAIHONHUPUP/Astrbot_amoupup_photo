@@ -26,7 +26,7 @@ from .utils import save_image_bytes, split_data_url
 
 PLUGIN_NAME = "astrbot_plugin_omnidraw"
 PLUGIN_AUTHOR = "雪碧bir"
-PLUGIN_VERSION = "3.4.1"
+PLUGIN_VERSION = "3.4.3"
 DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS = 24
 DEFAULT_MAX_CACHE_SIZE_MB = 512
 
@@ -102,6 +102,10 @@ class PluginConfig:
     verbose_report: bool
     show_generation_time: bool
     show_request_model: bool
+    negative_prompt_enabled: bool = True
+    base_negative: str = ""
+    room_negative: str = ""
+    item_negative: str = ""
 
     @classmethod
     def from_dict(
@@ -143,6 +147,7 @@ class PluginConfig:
         usage_conf = _ensure_dict(config_dict, "usage_config")
         cache_conf = _ensure_dict(config_dict, "cache_config")
         reply_conf = _ensure_dict(config_dict, "reply_config")
+        neg_conf = _ensure_dict(config_dict, "image_generation")
 
         _migrate_legacy_persona_config(config_dict, persona_conf)
 
@@ -250,6 +255,14 @@ class PluginConfig:
         reply_conf["draw_error_message"] = draw_error_message
         reply_conf["selfie_error_message"] = selfie_error_message
 
+        try:
+            from .core.negative_prompt import DEFAULT_BASE, DEFAULT_ITEM, DEFAULT_ROOM
+        except Exception:
+            from core.negative_prompt import DEFAULT_BASE, DEFAULT_ITEM, DEFAULT_ROOM
+        neg_conf["negative_prompt_enabled"] = _to_bool(neg_conf.get("negative_prompt_enabled", True))
+        neg_conf["base_negative"] = str(neg_conf.get("base_negative") or DEFAULT_BASE)
+        neg_conf["room_negative"] = str(neg_conf.get("room_negative") or DEFAULT_ROOM)
+        neg_conf["item_negative"] = str(neg_conf.get("item_negative") or DEFAULT_ITEM)
         return cls(
             providers=providers,
             video_providers=video_providers,
@@ -288,6 +301,10 @@ class PluginConfig:
             verbose_report=_to_bool(config_dict.get("verbose_report", False)),
             show_generation_time=_to_bool(config_dict.get("show_generation_time", False)),
             show_request_model=_to_bool(config_dict.get("show_request_model", False)),
+            negative_prompt_enabled=bool(neg_conf["negative_prompt_enabled"]),
+            base_negative=neg_conf["base_negative"],
+            room_negative=neg_conf["room_negative"],
+            item_negative=neg_conf["item_negative"],
         )
 
     def get_provider(self, provider_id: str) -> Optional[ProviderConfig]:

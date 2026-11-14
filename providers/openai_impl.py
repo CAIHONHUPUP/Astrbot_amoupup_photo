@@ -6,6 +6,7 @@ from typing import Any
 from astrbot.api import logger
 from ..constants import MAX_IMAGE_BYTES
 from ..core.image_options import is_gif_request
+from ..core.negative_prompt import merge_negative
 
 from .base import (
     BaseProvider,
@@ -21,6 +22,8 @@ from .base import (
 
 class OpenAIProvider(BaseProvider):
     async def generate_image(self, prompt: str, **kwargs: Any) -> str:
+        negative = str(kwargs.pop("negative_prompt", "") or "").strip()
+        prompt = merge_negative(prompt, negative)
         current_key = self.get_current_key()
         if not current_key:
             raise ValueError("节点未配置 API Key！")

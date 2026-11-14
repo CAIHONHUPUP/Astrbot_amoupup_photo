@@ -157,6 +157,7 @@ class CustomEndpointProvider(BaseProvider):
         raise ValueError("自定义接口返回结构异常，未找到图片数据: " + payload_summary)
 
     async def generate_image(self, prompt: str, **kwargs: Any) -> str:
+        negative = str(kwargs.pop("negative_prompt", "") or "").strip()
         current_key = self.get_current_key()
         if not current_key:
             raise ValueError("节点未配置 API Key！")
@@ -167,6 +168,8 @@ class CustomEndpointProvider(BaseProvider):
         endpoint_path = self._endpoint_path(endpoint)
         ref_images = self.get_reference_images(**kwargs)
         api_kwargs = self.filter_api_kwargs(kwargs)
+        if negative:
+            api_kwargs["negative_prompt"] = negative
         headers = {"Authorization": "Bearer " + current_key}
 
         logger.info(f"📝 [自定义通道] 最终发送给 API 的核心提示词:\n{prompt}")
