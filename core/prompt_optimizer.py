@@ -102,6 +102,76 @@ class PromptOptimizer:
         style_choice = getattr(self.config, "optimizer_style", "手机日常原生感")
         custom_prompt = getattr(self.config, "optimizer_custom_prompt", "").strip()
         custom_style_hint = custom_prompt
+        style_data, _quality_guardrails = self._build_style_data(style_choice, custom_prompt)
+        style_data, _ref_rule, _scene_lock, _pose_lock = self._apply_reference_rules(
+            style_data, has_reference, selfie, external_camera, locked_outfit, scene_lock, pose_lock
+        )
+        sys_prompt = self._build_system_prompt(style_data, _ref_rule, count, _quality_guardrails)
+
+        payload = {
+            "model": self.config.optimizer_model or provider.model,
+            "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": raw_action}],
+            "max_tokens": 4000 if count > 1 else 2500,
+            "temperature": 0.8,
+            "response_format": {"type": "json_object"}
+        }
+
+        session_obj = session
+        close_session = False
+        if session_obj is None:
+            session_obj = aiohttp.ClientSession()
+            close_session = True
+
+        try:
+            try:
+                timeout_val = self.config.optimizer_timeout * (1.5 if count > 1 else 1.0)
+                logger.info(f"🧠 [副脑] 正在以【{style_choice}】风格重构提示词 (模型: {self.config.optimizer_model})")
+
+                async with session_obj.post(endpoint, headers=headers, json=payload, timeout=timeout_val) as resp:
+                    resp.raise_for_status()
+                    response_text = await read_response_text_limited(
+                        resp,
+                        max_bytes=MAX_OPTIMIZER_RESPONSE_BYTES,
+                    )
+                    data = json.loads(response_text)
+
+                    if isinstance(data, dict) and "choices" in data and len(data["choices"]) > 0:
+                        raw_content = data["choices"][0]["message"]["content"].strip()
+                        items = self._parse_items(raw_content, count, _scene_lock, _pose_lock)
+
+                        results = []
+                        anti_collage = "single image, one natural coherent frame, no grid, no collage, no split screen, no multiple views"
+
+                        for item in items[:count]:
+                            if isinstance(item, dict):
+                                parts = []
+                                for k in ["subject_appearance", "clothing_and_accessories", "pose_and_action", "environment_and_scene", "lighting_and_mood", "technical_specs", "realism_and_quality_guardrails"]:
+                                    val = item.get(k, "")
+                                    if val and isinstance(val, str):
+                                        parts.append(val.strip())
+
+                                master_prompt = f"{anti_collage}, " + ", ".join(parts)
+                                master_prompt = re.sub(r'\s+', ' ', master_prompt)
+                                results.append(master_prompt)
+
+                        while len(results) < count:
+                            results.append(results[0] if results
+                                           else locked_prompt(raw_action, _scene_lock, _pose_lock)[0])
+
+                        logger.info(f"✨ [副脑] 成功重构并提取 {len(results[:count])} 组【{style_choice}】提示词！")
+                        return results[:count]
+
+            except Exception as e:
+                logger.warning(f"⚠️ [副脑降级] ({str(e)})")
+                return locked_prompt(raw_action, _scene_lock, _pose_lock) * count
+
+            return locked_prompt(raw_action, _scene_lock, _pose_lock) * count
+        finally:
+            if close_session and session_obj is not None:
+                await session_obj.close()
+
+    def _build_style_data(self, style_choice: str, custom_prompt: str):
+        """组装风格插槽，返回 (style_data, universal_quality_guardrails)。"""
         if custom_prompt and re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", custom_prompt):
             custom_style_hint = "the custom visual style described by the user, translated into natural English"
 
@@ -174,7 +244,10 @@ class PromptOptimizer:
             }
         else:
             style_data = STYLE_PRESETS.get(style_choice, STYLE_PRESETS["手机日常原生感"])
+        return style_data, universal_quality_guardrails
 
+    def _apply_reference_rules(self, style_data: dict, has_reference: bool, selfie: bool, external_camera: bool, locked_outfit: str, scene_lock: str, pose_lock: str):
+        """叠加参考图、自拍/他拍、今日穿搭与场景/姿势锁规则。"""
         # [patched] 有参考图时锁定人物外观，禁止副脑另编长相
         _ref_rule = ""
         if has_reference:
@@ -282,7 +355,10 @@ class PromptOptimizer:
                 + _pose_lock
                 + ". Do NOT change the pose, do NOT add another action."
             )
+        return style_data, _ref_rule, _scene_lock, _pose_lock
 
+    def _build_system_prompt(self, style_data: dict, ref_rule: str, count: int, universal_quality_guardrails: str) -> str:
+        """组装 JSON 输出格式与系统提示词。"""
         base_json_struct = f"""{{
   "subject_appearance": "{style_data['subject']}",
   "clothing_and_accessories": "{style_data['clothing']}",
@@ -302,7 +378,7 @@ CRITICAL RULES:
 3. ALL output values MUST be written in fluent natural English. Translate any Chinese, Japanese, Korean, or mixed-language user input into English. Do not copy non-English text into the JSON.
 4. ABSOLUTELY NO collages, grids, or multiple views. Describe exactly ONE single frozen moment.
 5. STYLE ADHERENCE: Strictly follow the aesthetics, materials, lighting, anatomy, skin, and realism guardrails described in the output format.
-6. Prefer concrete visual nouns and camera-language over abstract adjectives. Keep the prompt useful for an image model.{_ref_rule}
+6. Prefer concrete visual nouns and camera-language over abstract adjectives. Keep the prompt useful for an image model.{ref_rule}
 OUTPUT FORMAT (Use these exact keys):
 {base_json_struct}"""
         else:
@@ -314,7 +390,7 @@ CRITICAL RULES:
 3. ALL output values MUST be written in fluent natural English. Translate any Chinese, Japanese, Korean, or mixed-language user input into English. Do not copy non-English text into the JSON.
 4. ANTI-COLLAGE RULE: Each JSON object represents ONE SINGLE IMAGE. Pick exactly ONE specific pose and ONE camera angle per object.
 5. STYLE ADHERENCE: Strictly follow the aesthetics, materials, lighting, anatomy, skin, and realism guardrails described in the output format.
-6. Each variation must be visually distinct while remaining natural and physically plausible.{_ref_rule}
+6. Each variation must be visually distinct while remaining natural and physically plausible.{ref_rule}
 
 OUTPUT FORMAT:
 {{
@@ -323,166 +399,109 @@ OUTPUT FORMAT:
     ... (repeat {count} times)
   ]
 }}"""
+        return sys_prompt
 
-        payload = {
-            "model": self.config.optimizer_model or provider.model,
-            "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": raw_action}],
-            "max_tokens": 4000 if count > 1 else 2500,
-            "temperature": 0.8,
-            "response_format": {"type": "json_object"}
-        }
-
-        session_obj = session
-        close_session = False
-        if session_obj is None:
-            session_obj = aiohttp.ClientSession()
-            close_session = True
-
+    def _parse_items(self, raw_content: str, count: int, scene_lock: str, pose_lock: str) -> list:
+        """解析副脑 JSON；失败走抢救模式，最后回填场景/姿势锁。"""
+        items = []
         try:
+            clean_json_str = raw_content.strip()
+            fenced_json = re.fullmatch(
+                r"```(?:json)?\s*(.*?)\s*```",
+                clean_json_str,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if fenced_json:
+                clean_json_str = fenced_json.group(1).strip()
+
             try:
-                timeout_val = self.config.optimizer_timeout * (1.5 if count > 1 else 1.0)
-                logger.info(f"🧠 [副脑] 正在以【{style_choice}】风格重构提示词 (模型: {self.config.optimizer_model})")
+                prompt_data = json.loads(clean_json_str)
+            except json.JSONDecodeError as original_error:
+                prompt_data = None
+                decoder = json.JSONDecoder()
+                for match in re.finditer(r"[\[{]", clean_json_str):
+                    try:
+                        candidate, _ = decoder.raw_decode(clean_json_str[match.start():])
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(candidate, (dict, list)):
+                        prompt_data = candidate
+                        break
 
-                async with session_obj.post(endpoint, headers=headers, json=payload, timeout=timeout_val) as resp:
-                    resp.raise_for_status()
-                    response_text = await read_response_text_limited(
-                        resp,
-                        max_bytes=MAX_OPTIMIZER_RESPONSE_BYTES,
-                    )
-                    data = json.loads(response_text)
-
-                    if isinstance(data, dict) and "choices" in data and len(data["choices"]) > 0:
-                        raw_content = data["choices"][0]["message"]["content"].strip()
-
-                        items = []
+                for match in re.finditer(r"[\[{]", clean_json_str):
+                    if prompt_data is not None:
+                        break
+                    opener = match.group(0)
+                    closer = "]" if opener == "[" else "}"
+                    end_idx = clean_json_str.rfind(closer)
+                    if end_idx < match.start():
+                        continue
+                    candidate = clean_json_str[match.start():end_idx + 1]
+                    repaired_candidate = candidate.replace('\n', ' ').replace('\r', '')
+                    repaired_candidate = re.sub(r',\s*}', '}', repaired_candidate)
+                    repaired_candidate = re.sub(r',\s*]', ']', repaired_candidate)
+                    for candidate_text in (candidate, repaired_candidate):
                         try:
-                            clean_json_str = raw_content.strip()
-                            fenced_json = re.fullmatch(
-                                r"```(?:json)?\s*(.*?)\s*```",
-                                clean_json_str,
-                                flags=re.IGNORECASE | re.DOTALL,
-                            )
-                            if fenced_json:
-                                clean_json_str = fenced_json.group(1).strip()
+                            prompt_data = json.loads(candidate_text)
+                            break
+                        except json.JSONDecodeError:
+                            continue
+                    if prompt_data is not None:
+                        break
+                if prompt_data is None:
+                    raise original_error
 
-                            try:
-                                prompt_data = json.loads(clean_json_str)
-                            except json.JSONDecodeError as original_error:
-                                prompt_data = None
-                                decoder = json.JSONDecoder()
-                                for match in re.finditer(r"[\[{]", clean_json_str):
-                                    try:
-                                        candidate, _ = decoder.raw_decode(clean_json_str[match.start():])
-                                    except json.JSONDecodeError:
-                                        continue
-                                    if isinstance(candidate, (dict, list)):
-                                        prompt_data = candidate
-                                        break
+            if isinstance(prompt_data, list):
+                items = prompt_data
+            elif isinstance(prompt_data, dict):
+                if count == 1:
+                    items = [prompt_data]
+                else:
+                    items = prompt_data.get("results", [])
+            else:
+                raise ValueError("副脑返回 JSON 不是对象或数组")
+            # 模型常返回 {"results": ["..."]}：JSON 合法但元素不是对象，
+            # 直接跳过 apply_scene_pose_lock → 锁静默失效。这里统一逼它走抢救分支。
+            items = [item for item in items if isinstance(item, dict)]
+            if not items:
+                raise ValueError("副脑返回的数组里没有可用的对象字段")
+        except Exception as e:
+            logger.warning(f"⚠️ [副脑] 原生 JSON 解析失败, 启动无敌抢救模式... 错误: {e}")
+            fallback_item = {}
+            keys = ["subject_appearance", "clothing_and_accessories", "pose_and_action", "environment_and_scene", "lighting_and_mood", "technical_specs", "realism_and_quality_guardrails"]
 
-                                for match in re.finditer(r"[\[{]", clean_json_str):
-                                    if prompt_data is not None:
-                                        break
-                                    opener = match.group(0)
-                                    closer = "]" if opener == "[" else "}"
-                                    end_idx = clean_json_str.rfind(closer)
-                                    if end_idx < match.start():
-                                        continue
-                                    candidate = clean_json_str[match.start():end_idx + 1]
-                                    repaired_candidate = candidate.replace('\n', ' ').replace('\r', '')
-                                    repaired_candidate = re.sub(r',\s*}', '}', repaired_candidate)
-                                    repaired_candidate = re.sub(r',\s*]', ']', repaired_candidate)
-                                    for candidate_text in (candidate, repaired_candidate):
-                                        try:
-                                            prompt_data = json.loads(candidate_text)
-                                            break
-                                        except json.JSONDecodeError:
-                                            continue
-                                    if prompt_data is not None:
-                                        break
-                                if prompt_data is None:
-                                    raise original_error
+            search_text = raw_content
+            for key in keys:
+                idx = search_text.find(f'"{key}"')
+                if idx == -1:
+                    continue
+                colon_idx = search_text.find(':', idx)
+                if colon_idx == -1:
+                    continue
+                quote_idx = search_text.find('"', colon_idx)
+                if quote_idx == -1:
+                    continue
 
-                            if isinstance(prompt_data, list):
-                                items = prompt_data
-                            elif isinstance(prompt_data, dict):
-                                if count == 1:
-                                    items = [prompt_data]
-                                else:
-                                    items = prompt_data.get("results", [])
-                            else:
-                                raise ValueError("副脑返回 JSON 不是对象或数组")
-                            # 模型常返回 {"results": ["..."]}：JSON 合法但元素不是对象，
-                            # 直接跳过 apply_scene_pose_lock → 锁静默失效。这里统一逼它走抢救分支。
-                            items = [item for item in items if isinstance(item, dict)]
-                            if not items:
-                                raise ValueError("副脑返回的数组里没有可用的对象字段")
-                        except Exception as e:
-                            logger.warning(f"⚠️ [副脑] 原生 JSON 解析失败, 启动无敌抢救模式... 错误: {e}")
-                            fallback_item = {}
-                            keys = ["subject_appearance", "clothing_and_accessories", "pose_and_action", "environment_and_scene", "lighting_and_mood", "technical_specs", "realism_and_quality_guardrails"]
+                next_key_idx = len(search_text)
+                for k in keys:
+                    if k == key:
+                        continue
+                    k_idx = search_text.find(f'"{k}"', quote_idx)
+                    if k_idx != -1 and k_idx < next_key_idx:
+                        next_key_idx = k_idx
 
-                            search_text = raw_content
-                            for key in keys:
-                                idx = search_text.find(f'"{key}"')
-                                if idx == -1:
-                                    continue
-                                colon_idx = search_text.find(':', idx)
-                                if colon_idx == -1:
-                                    continue
-                                quote_idx = search_text.find('"', colon_idx)
-                                if quote_idx == -1:
-                                    continue
+                raw_val = search_text[quote_idx + 1:next_key_idx]
+                raw_val = raw_val.strip().rstrip('}').rstrip(']').rstrip(',').strip().rstrip('"')
+                raw_val = raw_val.replace('"', "'").replace('\n', ' ')
+                if raw_val:
+                    fallback_item[key] = raw_val
 
-                                next_key_idx = len(search_text)
-                                for k in keys:
-                                    if k == key:
-                                        continue
-                                    k_idx = search_text.find(f'"{k}"', quote_idx)
-                                    if k_idx != -1 and k_idx < next_key_idx:
-                                        next_key_idx = k_idx
+            if fallback_item:
+                items = [fallback_item]
+                logger.info(f"🚑 [副脑] 抢救成功！已强行提取 {len(fallback_item)} 个字段。")
+            else:
+                raise ValueError("抢救模式未能提取到任何有效字段")
 
-                                raw_val = search_text[quote_idx + 1:next_key_idx]
-                                raw_val = raw_val.strip().rstrip('}').rstrip(']').rstrip(',').strip().rstrip('"')
-                                raw_val = raw_val.replace('"', "'").replace('\n', ' ')
-                                if raw_val:
-                                    fallback_item[key] = raw_val
-
-                            if fallback_item:
-                                items = [fallback_item]
-                                logger.info(f"🚑 [副脑] 抢救成功！已强行提取 {len(fallback_item)} 个字段。")
-                            else:
-                                raise ValueError("抢救模式未能提取到任何有效字段")
-
-                        # [patched][amo] 解析后强制回填场景/姿势，避免副脑改写日程
-                        items = apply_scene_pose_lock(items, _scene_lock, _pose_lock)
-
-                        results = []
-                        anti_collage = "single image, one natural coherent frame, no grid, no collage, no split screen, no multiple views"
-
-                        for item in items[:count]:
-                            if isinstance(item, dict):
-                                parts = []
-                                for k in ["subject_appearance", "clothing_and_accessories", "pose_and_action", "environment_and_scene", "lighting_and_mood", "technical_specs", "realism_and_quality_guardrails"]:
-                                    val = item.get(k, "")
-                                    if val and isinstance(val, str):
-                                        parts.append(val.strip())
-
-                                master_prompt = f"{anti_collage}, " + ", ".join(parts)
-                                master_prompt = re.sub(r'\s+', ' ', master_prompt)
-                                results.append(master_prompt)
-
-                        while len(results) < count:
-                            results.append(results[0] if results
-                                           else locked_prompt(raw_action, _scene_lock, _pose_lock)[0])
-
-                        logger.info(f"✨ [副脑] 成功重构并提取 {len(results[:count])} 组【{style_choice}】提示词！")
-                        return results[:count]
-
-            except Exception as e:
-                logger.warning(f"⚠️ [副脑降级] ({str(e)})")
-                return locked_prompt(raw_action, _scene_lock, _pose_lock) * count
-
-            return locked_prompt(raw_action, _scene_lock, _pose_lock) * count
-        finally:
-            if close_session and session_obj is not None:
-                await session_obj.close()
+        # [patched][amo] 解析后强制回填场景/姿势，避免副脑改写日程
+        items = apply_scene_pose_lock(items, scene_lock, pose_lock)
+        return items

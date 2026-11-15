@@ -136,6 +136,7 @@ chain_manager_module = importlib.import_module(f"{PACKAGE_NAME}.core.chain_manag
 prompt_optimizer_module = importlib.import_module(f"{PACKAGE_NAME}.core.prompt_optimizer")
 video_manager_module = importlib.import_module(f"{PACKAGE_NAME}.core.video_manager")
 main_module = importlib.import_module(f"{PACKAGE_NAME}.main")
+main_config = importlib.import_module(f"{PACKAGE_NAME}.main_config")
 
 ProviderConfig = models_module.ProviderConfig
 PluginConfig = models_module.PluginConfig
@@ -2787,12 +2788,12 @@ class ReliabilityBoundaryRegressionTest(unittest.IsolatedAsyncioTestCase):
             async def get_json(*args, **kwargs):
                 return {"verbose_report": True}
 
-            original_request = main_module.request
-            main_module.request = types.SimpleNamespace(content_length=None, get_json=get_json)
+            original_request = main_config.request
+            main_config.request = types.SimpleNamespace(content_length=None, get_json=get_json)
             try:
                 response, status = await plugin.save_config_handler()
             finally:
-                main_module.request = original_request
+                main_config.request = original_request
 
             self.assertEqual(status, 500)
             self.assertFalse(response["args"][0]["success"])

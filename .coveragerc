@@ -1,0 +1,13 @@
+[run]
+source = .
+omit =
+    tests/*
+    tools/*
+    __pycache__/*
+    _test_tmp/*
+
+[report]
+# 只立一条防倒退底线：先按实测值定，只许往上调
+fail_under = 65
+show_missing = True
+skip_covered = True

@@ -1,7 +1,23 @@
 import aiohttp
 import base64
 import json
+import socket
 from typing import Any
+
+# 2026-11-15: api.syuan.org 的 DNS 轮询里混有不可用节点（TCP 通、TLS 握手超时）。
+# 这里把该域名固定到已验证可用的节点；换 IP 时改 _AMO_IMAGE_IP 即可。
+_AMO_IMAGE_HOST = "api.syuan.org"
+_AMO_IMAGE_IP = "103.118.245.151"
+if not getattr(socket, "_amo_image_pinned", False):
+    _amo_orig_getaddrinfo = socket.getaddrinfo
+
+    def _amo_getaddrinfo(host, port, *args, **kwargs):
+        if str(host or "").strip().lower() == _AMO_IMAGE_HOST:
+            host = _AMO_IMAGE_IP
+        return _amo_orig_getaddrinfo(host, port, *args, **kwargs)
+
+    socket.getaddrinfo = _amo_getaddrinfo
+    socket._amo_image_pinned = True
 
 from astrbot.api import logger
 from ..constants import MAX_IMAGE_BYTES

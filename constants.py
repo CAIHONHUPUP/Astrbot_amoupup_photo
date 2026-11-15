@@ -37,3 +37,76 @@ class MessageEmoji:
     WARNING = "⚠️"
     INFO = "ℹ️"
     PAINTING = "🎨"
+
+
+# 以下常量由 main.py 迁入，供主模块与命令/任务/缓存 mixin 共享。
+CACHE_DIR_NAMES = ("temp_images", "user_refs")
+PLUGIN_RESULT_ERROR_MAX_LENGTH = 240
+MAX_REFERENCE_IMAGES_PER_REQUEST = 14
+MAX_REMOTE_REDIRECTS = 3
+MAX_BACKGROUND_TASKS = 16
+MAX_ACTIVE_BACKGROUND_TASKS = 4
+CACHE_IMAGE_EXTENSIONS = frozenset({
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".avif",
+    ".heic",
+    ".heif",
+    ".tif",
+    ".tiff",
+    ".jfif",
+})
+DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS = 24
+DEFAULT_MAX_CACHE_SIZE_MB = 512
+LEGACY_COMMAND_PREFIXES = ("/", "!", "！", ".")
+PRESET_VIEW_COMMANDS = ("查看预设",)
+PRESET_LIST_COMMANDS = ("查看预设", "极速宏")
+RESERVED_PRESET_NAMES = frozenset({
+    "万象帮助",
+    "查看预设",
+    "极速宏",
+    "添加预设",
+    "删除预设",
+    "清理缓存",
+    "签到",
+    "人设",
+    "切换人设",
+    "切换链路",
+    "切换模型",
+    "画",
+    "自拍",
+    "视频",
+})
+RESERVED_GENERATION_PARAM_KEYS = frozenset({
+    "user_refs",
+    "user_ref",
+    "persona_refs",
+    "persona_ref",
+    "n",
+    "stream",
+    "messages",
+    "input",
+    "prompt",
+    "tools",
+})
+
+# 配置/页面层常量（原 main.py，2026-11-16 迁入，main 与 main_config 共享）
+PAGE_PREVIEW_IMAGE_BYTES = 80 * 1024 * 1024
+MAX_PAGE_IMAGE_TOKENS = 4096
+NATIVE_ACTIVE_PERSONA_FILE_PREFIX = "files/persona_config/persona_ref_image/"
+MASKED_API_KEY_PREFIX = "••••"
+MAX_CONFIG_REQUEST_BYTES = 128 * 1024 * 1024
+MAX_PLUGIN_REQUEST_BYTES = 96 * 1024 * 1024
+MAX_PROMPT_CHARS = 16_000
+MAX_EXTRA_PARAMS_CHARS = 8_192
+LEGACY_PERSONA_CONFIG_KEYS = (
+    "persona_name",
+    "persona_base_prompt",
+    "persona_ref_image",
+    "persona_ref_images",
+)
+LEGACY_PROVIDER_API_KEY_KEYS = ("API密钥",)

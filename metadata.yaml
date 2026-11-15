@@ -2,7 +2,7 @@ name: astrbot_plugin_omnidraw
 display_name: 万象画卷·能陪自用版
 desc: 轻快生图插件，文生图、图生图、自拍、视频一站搞定。
 help: 发送 /万象帮助 查看说明
-version: 3.4.4
+version: 3.4.5
 author: 雪碧bir
 repo: https://github.com/CAIHONHUPUP/astrbot_plugin_omnidraw-amoupup
 astrbot_version: ">=4.16,<5"

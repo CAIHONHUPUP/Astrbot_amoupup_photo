@@ -5,6 +5,7 @@ import base64
 import contextvars
 import copy
 import hashlib
+import importlib
 import json
 import os
 import tempfile
@@ -18,6 +19,7 @@ import test_custom_endpoint as fixtures
 
 
 main = fixtures.main_module
+main_config = importlib.import_module((main.__package__ + "." if main.__package__ else "") + "main_config")
 IMAGE_BYTES = b"\x89PNG\r\n\x1a\n" + b"original-reference" * 30
 IMAGE_DATA = "data:image/png;base64," + base64.b64encode(IMAGE_BYTES).decode("ascii")
 REMOTE_IMAGE = "https://images.example/reference.png?version=1"
@@ -107,8 +109,8 @@ class PageBackendTest(unittest.IsolatedAsyncioTestCase):
         self.context = PageContext()
         with patch.object(fixtures.OmniDrawPlugin, "_resolve_data_dir", return_value=str(self.data_dir)):
             self.plugin = fixtures.OmniDrawPlugin(self.context, self.native)
-        request_patch = patch.object(main, "request", PageRequest())
-        jsonify_patch = patch.object(main, "jsonify", lambda payload: payload)
+        request_patch = patch.object(main_config, "request", PageRequest())
+        jsonify_patch = patch.object(main_config, "jsonify", lambda payload: payload)
         request_patch.start()
         jsonify_patch.start()
         self.addCleanup(request_patch.stop)
@@ -166,7 +168,7 @@ class PageBackendTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.plugin._config_for_page(), legacy)
 
     async def test_compact_reads_do_not_encode_whole_reference_images(self):
-        with patch.object(main.base64, "b64encode", side_effect=AssertionError("compact mode encoded image bytes")):
+        with patch.object(main_config.base64, "b64encode", side_effect=AssertionError("compact mode encoded image bytes")):
             config = await self.plugin.get_page_config_handler()
         self.assertEqual(len(config["persona_config"]["profiles"]), 2)
 
@@ -281,7 +283,7 @@ class PageBackendTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_token_cache_bound_eviction_fails_safely_on_save(self):
         payload = await self.plugin.get_page_config_handler()
-        with patch.object(main, "MAX_PAGE_IMAGE_TOKENS", 2):
+        with patch.object(main_config, "MAX_PAGE_IMAGE_TOKENS", 2):
             self.plugin._page_image_tokens.clear()
             first = self.plugin._local_image_preview_url(str(self.first_ref))
             self.plugin._local_image_preview_url(str(self.second_ref))
@@ -319,7 +321,7 @@ class PageBackendTest(unittest.IsolatedAsyncioTestCase):
         payload = await self.plugin.get_page_config_handler()
         payload["persona_config"]["profiles"][0]["persona_ref_image"] = []
         payload["persona_config"]["persona_ref_image"] = []
-        with patch.object(main, "VideoManager", side_effect=RuntimeError("injected manager failure")):
+        with patch.object(main_config, "VideoManager", side_effect=RuntimeError("injected manager failure")):
             result, status = await self.save(payload)
         self.assertEqual(status, 500)
         self.assertFalse(result["success"])
@@ -494,9 +496,9 @@ class PageBackendTest(unittest.IsolatedAsyncioTestCase):
             threads.append(threading.get_ident())
             return original(*args, **kwargs)
 
-        with patch.object(main.request, "args", {"token": token, "format": "data_url"}), \
+        with patch.object(main_config.request, "args", {"token": token, "format": "data_url"}), \
                 patch.object(self.plugin, "_image_ref_for_page", side_effect=encode), \
-                patch.object(main, "send_file", side_effect=AssertionError("JSON preview must not send binary")):
+                patch.object(main_config, "send_file", side_effect=AssertionError("JSON preview must not send binary")):
             response, status = unpack_response(await self.plugin.get_image_handler())
         self.assertEqual(status, 200)
         self.assertEqual(response, {"success": True, "data_url": IMAGE_DATA})
@@ -512,7 +514,7 @@ class PageBackendTest(unittest.IsolatedAsyncioTestCase):
             calls.append((path, kwargs))
             return {"binary": True}
 
-        with patch.object(main.request, "args", {"token": token}), patch.object(main, "send_file", side_effect=send_file):
+        with patch.object(main_config.request, "args", {"token": token}), patch.object(main_config, "send_file", side_effect=send_file):
             response = await self.plugin.get_image_handler()
         self.assertEqual(response, {"binary": True})
         self.assertEqual(calls, [(str(self.first_ref), {"mimetype": "image/png"})])
@@ -529,8 +531,8 @@ class PageBackendTest(unittest.IsolatedAsyncioTestCase):
             url = self.plugin._local_image_preview_url(str(path))
             args_values.append({"token": parse_qs(urlparse(url).query)["token"][0], "format": "data_url"})
         for args in args_values:
-            with self.subTest(args=args), patch.object(main.request, "args", args), \
-                    patch.object(main, "send_file", side_effect=AssertionError("unsafe preview was sent")):
+            with self.subTest(args=args), patch.object(main_config.request, "args", args), \
+                    patch.object(main_config, "send_file", side_effect=AssertionError("unsafe preview was sent")):
                 response, status = unpack_response(await self.plugin.get_image_handler())
                 self.assertEqual(status, 404)
                 self.assertFalse(response["success"])
@@ -540,8 +542,8 @@ class PageBackendTest(unittest.IsolatedAsyncioTestCase):
     async def test_get_image_json_preview_limit_returns_413_not_a_nested_token(self):
         image_url = self.plugin._local_image_preview_url(str(self.first_ref))
         token = parse_qs(urlparse(image_url).query)["token"][0]
-        with patch.object(main.request, "args", {"token": token, "format": "data_url"}), \
-                patch.object(main, "PAGE_PREVIEW_IMAGE_BYTES", 1):
+        with patch.object(main_config.request, "args", {"token": token, "format": "data_url"}), \
+                patch.object(main_config, "PAGE_PREVIEW_IMAGE_BYTES", 1):
             response, status = unpack_response(await self.plugin.get_image_handler())
         self.assertEqual(status, 413)
         self.assertFalse(response["success"])
