@@ -265,6 +265,28 @@ class OmniDrawCacheMixin:
         )
         return result
 
+    def _schedule_cache_prune(
+        self,
+        trigger: str = "auto",
+        protected_paths: Optional[Iterable[str]] = None,
+    ) -> None:
+        """把机会性缓存清理放到后台线程，别在事件循环里同步扫缓存目录。"""
+        protected = [str(path) for path in (protected_paths or []) if path]
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # 没有运行中的事件循环（同步调用/退出阶段）：跳过这次机会性清理
+            return
+        try:
+            self._create_background_task(
+                asyncio.to_thread(self._prune_cache_if_needed, trigger, protected_paths=protected),
+                kind="cache_prune",
+                leased_paths=protected,
+            )
+        except RuntimeError:
+            # 后台队列满：放弃这次机会性清理，定时/容量清理仍会处理
+            return
+
     def _cache_cleanup_interval_seconds(self) -> int:
         configured_hours = self._to_nonnegative_int(
             getattr(self.plugin_config, "scheduled_cleanup_interval_hours", DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS),

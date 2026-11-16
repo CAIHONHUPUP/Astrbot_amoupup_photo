@@ -896,6 +896,8 @@ class OmniDrawConfigMixin:
                 frame_count=payload.get("frame_count", 9),
                 frame_duration_ms=payload.get("frame_duration_ms", 200),
                 negative_prompt=str(payload.get("negative_prompt", "") or ""),
+                scene_lock=str(payload.get("scene_lock", "") or ""),
+                pose_lock=str(payload.get("pose_lock", "") or ""),
             )
             status_code = 200 if result.get("success") else 500
             return jsonify(result), status_code

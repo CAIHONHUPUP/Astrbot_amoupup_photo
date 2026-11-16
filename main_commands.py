@@ -360,7 +360,9 @@ class OmniDrawCommandMixin:
                     mode="selfie",
                     event=event,
                     record_usage=True,
-                    allow_local_refs=not explicit_refs,
+                    # [2026-11-16] 事件图/LLM 给的本地图一律限制在 data_dir 内；
+                    # 只有 amo 这类直接调用 Python 方法的受信任插件才显式开 allow_local_refs。
+                    allow_local_refs=False,
                     use_gif=use_gif,
                     frame_count=frame_count,
                     frame_duration_ms=frame_duration_ms,
@@ -459,7 +461,9 @@ class OmniDrawCommandMixin:
                     refs=refs if explicit_refs else self._get_event_images(event),
                     event=event,
                     record_usage=True,
-                    allow_local_refs=not explicit_refs,
+                    # [2026-11-16] 事件图/LLM 给的本地图一律限制在 data_dir 内；
+                    # 只有 amo 这类直接调用 Python 方法的受信任插件才显式开 allow_local_refs。
+                    allow_local_refs=False,
                     use_gif=use_gif,
                     frame_count=frame_count,
                     frame_duration_ms=frame_duration_ms,
@@ -645,12 +649,6 @@ class OmniDrawCommandMixin:
             except Exception:
                 value = False
         return bool(value)
-
-    def _event_command_text(self, event: AstrMessageEvent, allow_bare: bool = False) -> str:
-        return self._command_text_without_prefix(
-            self._get_event_text(event),
-            allow_bare=allow_bare or self._event_is_at_or_wake_command(event),
-        )
 
     def _stop_event_if_possible(self, event: AstrMessageEvent) -> None:
         stop_event = getattr(event, "stop_event", None)
@@ -866,9 +864,6 @@ class OmniDrawCommandMixin:
         if status.get("level") == "not_usable_user":
             return f"{MessageEmoji.WARNING} 当前仅允许可使用人员白名单内用户使用万象画卷。"
         return f"{MessageEmoji.WARNING} 你已被加入用户黑名单，无法使用万象画卷。"
-
-    def _has_permission(self, event: AstrMessageEvent) -> bool:
-        return bool(self._access_status(event).get("allowed", True))
 
     def _get_event_text(self, event: AstrMessageEvent) -> str:
         text = getattr(event, "message_str", "") or getattr(getattr(event, "message_obj", None), "message_str", "")

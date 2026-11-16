@@ -12,7 +12,7 @@
       "base_negative": {
         "description": "通用负面词",
         "type": "text",
-        "default": "人物, 人类, 文字, 水印, 签名, 二次元, 插画, 畸形, 多余的肢体, 模糊, 低画质"
+        "default": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质"
       },
       "room_negative": {
         "description": "房间场景追加负面词",

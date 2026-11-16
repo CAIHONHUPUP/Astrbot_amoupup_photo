@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-DEFAULT_BASE = "人物, 人类, 文字, 水印, 签名, 二次元, 插画, 畸形, 多余的肢体, 模糊, 低画质"
+DEFAULT_BASE = "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质"
 DEFAULT_ROOM = "拥挤, 杂乱无章, 地板悬空, 墙壁破损"
 DEFAULT_ITEM = "穿模, 不对称, 背景杂乱"
 

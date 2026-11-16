@@ -67,6 +67,7 @@ from .constants import (
 )
 from .core.chain_manager import ChainManager, ChainRunResult
 from .core.image_options import is_gif_request, normalize_gif_options
+from .core.negative_prompt import DEFAULT_BASE
 from .core.parser import CommandParser
 from .core.persona_manager import PersonaManager
 from .core.prompt_optimizer import PromptOptimizer
@@ -95,6 +96,8 @@ from .main_tasks import OmniDrawTaskMixin
 
 PRESET_ADD_COMMANDS = ("添加预设",)
 PRESET_DELETE_COMMANDS = ("删除预设",)
+#: 旧版本默认负面词（含“二次元, 插画”）；只在配置值仍是它时自动升级。
+_LEGACY_BASE_NEGATIVE_DEFAULT = "人物, 人类, 文字, 水印, 签名, 二次元, 插画, 畸形, 多余的肢体, 模糊, 低画质"
 CONFIG_KEYS = {
     "permission_config",
     "persona_config",
@@ -106,6 +109,7 @@ CONFIG_KEYS = {
     "usage_config",
     "cache_config",
     "reply_config",
+    "image_generation",
     "verbose_report",
     "show_generation_time",
     "show_request_model",
@@ -114,6 +118,22 @@ CONFIG_KEYS = {
     "persona_ref_image",
     "persona_ref_images",
 }
+
+
+#: “别人/他物持机”的说法：命中就放开全身构图，否则一律按自拍处理。
+#: 只做正向的“持机动作”匹配，不解析否定句（“不要让朋友帮我拍”仍会命中“朋友帮”）；
+#: 中文否定叠加嵌套从句时关键词无法正确切分，误判的代价只是构图多了点自由度。
+#: 只收“持机动作”，不收“同框的人”（朋友/同伴/一起），否则“和朋友一起自拍”会被误判。
+_EXTERNAL_CAMERA_HINTS = (
+    "帮我拍", "帮忙拍", "帮拍", "帮我照", "帮忙照",
+    "让他拍", "让她拍", "让人拍", "让别人拍", "让人帮", "找人拍",
+    "请人拍", "请他拍", "请她拍",
+    "路人帮", "路人拍",
+    "朋友帮", "朋友给", "朋友拍", "同学帮", "同学给", "同学拍",
+    "同伴帮", "同伴给", "同伴拍", "同事帮", "同事给", "同事拍",
+    "家人帮", "家人给", "家人拍",
+    "摄影师", "三脚架", "定时拍", "支架拍", "自拍杆架",
+)
 
 
 @register(PLUGIN_NAME, PLUGIN_AUTHOR, f"万象画卷 v{PLUGIN_VERSION}", PLUGIN_VERSION)
@@ -248,9 +268,22 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                     continue
                 filtered_presets.append(preset)
             cleaned["presets"] = filtered_presets
+        self._upgrade_legacy_negative_prompt(cleaned)
         self._sync_native_active_persona_upload(cleaned)
         return cleaned
 
+    def _upgrade_legacy_negative_prompt(self, config: Dict[str, Any]) -> None:
+        """[2026-11-16] 旧默认负面词含“二次元, 插画”，和日系插画风格互相打架。
+
+        只升级“值仍等于旧默认”的配置，用户自己改过的一律不动。
+        """
+        image_generation = config.get("image_generation")
+        if not isinstance(image_generation, dict):
+            return
+        if str(image_generation.get("base_negative") or "").strip() != _LEGACY_BASE_NEGATIVE_DEFAULT:
+            return
+        image_generation["base_negative"] = DEFAULT_BASE
+        logger.info("[OmniDraw] 已把旧的「二次元/插画」默认负面词升级为当前默认值。")
 
     async def _send_gif_result(
         self, event: AstrMessageEvent, result: Any,
@@ -287,6 +320,7 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
         scene_lock: str = "",
         pose_lock: str = "",
         negative_prompt: str = "",
+        allow_local_refs: bool = False,
     ) -> Dict[str, Any]:
         request_options = self._image_request_options(
             extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms,
@@ -317,7 +351,9 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                     )
                 )
                 optimized_actions = self._normalize_plugin_prompts(optimized_actions, prompt, count)
-                safe_refs = await self._process_and_save_images(raw_refs, session=session)
+                safe_refs = await self._process_and_save_images(
+                    raw_refs, session=session, allow_local_refs=allow_local_refs,
+                )
                 leased_paths = self._lease_cache_paths(safe_refs)
 
                 kwargs = {"user_refs": safe_refs} if safe_refs else {}
@@ -371,6 +407,7 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
         scene_lock: str = "",
         pose_lock: str = "",
         negative_prompt: str = "",
+        allow_local_refs: bool = False,
     ) -> Dict[str, Any]:
         request_options = self._image_request_options(
             extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms,
@@ -400,25 +437,8 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                 # [patched] 按"谁在持机"决定构图自由度：
                 #   明确让别人/他物持机 → 第三人称视角，放开全身；
                 #   其余（含"和朋友一起自拍"这类同框但自己举机）→ 自拍视角，受自拍物理限制。
-                _external_camera_hints = (
-                    "帮我拍", "帮忙拍", "帮拍", "帮我照", "帮忙照",
-                    "让他拍", "让她拍", "让人拍", "让别人拍", "让人帮", "找人拍",
-                    "请人拍", "请他拍", "请她拍",
-                    "路人帮", "路人拍",
-                    "朋友帮", "朋友给", "朋友拍", "同学帮", "同学给", "同学拍",
-                    "同伴帮", "同伴给", "同伴拍", "同事帮", "同事给", "同事拍",
-                    "家人帮", "家人给", "家人拍",
-                    "摄影师", "三脚架", "定时拍", "支架拍", "自拍杆架",
-                )
-                # 这里只做正向的"持机动作"匹配，不解析否定句。
-                # 例如"不要让朋友帮我拍"仍会命中"朋友帮"。中文否定叠加嵌套从句时
-                # 关键词无法正确切分，而误判的下场只是构图多了点自由度，不值得引入规则。
-                # 只收"持机动作"，不收"同框的人"（朋友/同伴/一起）——
-                # 否则"和朋友一起自拍"会被判成别人持机，反而放开成第三人视角。
-                _act_text = fallback_action or ""
-                # 只要有"别人/他物持机"的信号，就放开全身构图；否则一律按自拍处理。
-                _has_external_camera = any(h in _act_text for h in _external_camera_hints)
-                _is_self_shot = not _has_external_camera
+                # 关键词表见模块级 _EXTERNAL_CAMERA_HINTS；命令 /自拍 走同一个判断。
+                _has_external_camera, _is_self_shot = self._selfie_camera_flags(fallback_action)
                 # [patched] amo 当天锁定的穿搭：副脑会把它写成唯一的 clothing，别让 action 里的衣服带跑
                 locked_outfit = self._load_locked_outfit()
                 optimized_actions = [fallback_action] * count if gif_requested else await self.prompt_optimizer.optimize(
@@ -429,7 +449,9 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                     scene_lock=scene_lock, pose_lock=pose_lock,
                 )
                 optimized_actions = self._normalize_plugin_prompts(optimized_actions, fallback_action, count)
-                safe_refs = await self._process_and_save_images(target_refs, session=session)
+                safe_refs = await self._process_and_save_images(
+                    target_refs, session=session, allow_local_refs=allow_local_refs,
+                )
                 leased_paths = self._lease_cache_paths(safe_refs)
 
                 try:
@@ -802,6 +824,12 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
             self._release_image_quota(event, reserved_count)
             raise
 
+    def _selfie_camera_flags(self, action: str) -> Tuple[bool, bool]:
+        """[patched] 按“谁在持机”决定构图自由度：返回 (has_external_camera, is_self_shot)。"""
+        text = str(action or "")
+        has_external_camera = any(hint in text for hint in _EXTERNAL_CAMERA_HINTS)
+        return has_external_camera, not has_external_camera
+
     @filter.command("自拍")
     @handle_errors
     async def cmd_selfie(
@@ -835,17 +863,33 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
             user_input = user_input or "看着镜头微笑"
             started_at = time.perf_counter()
             async with aiohttp.ClientSession() as session:
+                # [patched] 命令自拍与 amo 自拍链路走同一套 optimize 参数：先把参考图定下来，
+                # 才能告诉副脑“有参考图/是不是自拍”，并按 amo 当天穿搭锁衣服。
+                raw_refs = self._get_event_images(event)
+                target_refs = raw_refs if raw_refs else self.plugin_config.persona_ref_images
+                _has_external_camera, _is_self_shot = self._selfie_camera_flags(user_input)
+                locked_outfit = self._load_locked_outfit()
                 optimized_actions = (
                     [user_input] if is_gif_request(kwargs)
-                    else await self.prompt_optimizer.optimize(user_input, count=1, session=session)
+                    else await self.prompt_optimizer.optimize(
+                        user_input, count=1, session=session,
+                        has_reference=bool(target_refs), selfie=_is_self_shot,
+                        external_camera=_has_external_camera,
+                        locked_outfit=locked_outfit,
+                    )
                 )
                 final_prompt, extra_kwargs = self.persona_manager.build_persona_prompt(
                     optimized_actions[0] if optimized_actions else user_input
                 )
+                if locked_outfit:
+                    # 与 _run_selfie_generation 一致：副脑写了别的衣服，也以这句为准
+                    final_prompt = (
+                        final_prompt.rstrip(", ")
+                        + ", she is wearing exactly: " + locked_outfit
+                        + "; today's outfit is fixed and must not be changed or replaced"
+                    )
                 extra_kwargs.update(kwargs)
 
-                raw_refs = self._get_event_images(event)
-                target_refs = raw_refs if raw_refs else self.plugin_config.persona_ref_images
                 safe_refs = await self._process_and_save_images(target_refs, session=session)
                 if safe_refs:
                     extra_kwargs["user_refs"] = safe_refs

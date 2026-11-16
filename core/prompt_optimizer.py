@@ -53,18 +53,91 @@ def apply_scene_pose_lock(items, scene_lock: str = "", pose_lock: str = ""):
     return items
 
 
-def locked_prompt(raw_action: str, scene_lock: str = "", pose_lock: str = "") -> list:
-    """副脑关闭/未配置/超时时也要保住场景与姿势锁。
+def locked_prompt(raw_action: str, scene_lock: str = "", pose_lock: str = "", style_lock: str = "") -> list:
+    """副脑关闭/未配置/超时时也要保住场景、姿势与画风锁。
 
     以前这些早退分支直接 return [raw_action] * count，amo 传进来的 scene_lock/pose_lock
     全部丢掉，出图与日程不符，但 amo 日志还打印“已锁定”，看起来像生效。
     """
     text = str(raw_action or "").strip()
-    locks = [str(part or "").strip() for part in (scene_lock, pose_lock)]
-    locks = [part for part in locks if part and part not in text]
+    seen = text.lower()
+    locks = []
+    for part in (scene_lock, pose_lock, style_lock):
+        piece = str(part or "").strip()
+        if piece and piece.lower() not in seen:
+            locks.append(piece)
+            seen += " " + piece.lower()
     if locks:
         text = (text + ", " + ", ".join(locks)) if text else ", ".join(locks)
     return [text]
+
+
+#: 与风格锁冲突的短语（副脑有时会写"not an illustration"之类的反向描述）
+_STYLE_CONFLICT_RE = re.compile(
+    r"not an? (?:stock )?(?:photo|photograph|illustration)"
+    r"|real-life (?:snapshot|photo)"
+    r"|photo-?realistic",
+    re.I,
+)
+_STYLE_WS_RE = re.compile(r"\s{2,}")
+_STYLE_COMMA_RE = re.compile(r"\s*,\s*,+")
+#: 预设相机句里的“画风/媒介”词；整句没命中时按段清掉，避免旧画风和新风格锁并存
+_STYLE_MEDIUM_RE = re.compile(
+    r"illustration|linework|shading|render|2d|cel|anime|painting|sketch|cartoon|comic",
+    re.I,
+)
+
+
+#: 风格锁文案：预设名 → 覆盖句（用于把某个预设的成片口味固定下来）
+STYLE_LOCK_TEXTS = {
+    "日系插画大师": "refined semi-realistic anime illustration, realistic skin texture with subtle pores, natural window light with soft realistic shadows, muted natural color grading, photographic lighting, accurate anatomy and proportions, high detail",
+}
+
+
+def apply_style_lock(items, style_data, style_choice=""):
+    """[amo patch] 风格锁：不管副脑怎么写，technical_specs 里一定带上当前预设的画风句。
+
+    只覆盖技术/风格描述，不动场景、姿势、衣服；同时清掉与预设相冲突的短语
+    （"not an illustration" / "real-life snapshot" / "photorealistic" 等），
+    避免同一套配置一会儿动漫、一会儿写实。
+    """
+    lock_camera = str(STYLE_LOCK_TEXTS.get(style_choice) or (style_data or {}).get("camera") or "").strip()
+    if not lock_camera or not items:
+        return items
+    preset_camera = str((style_data or {}).get("camera") or "").strip()
+    # 整句 replace 只能命中“原样照抄”；副脑把相机句写短/改写时，
+    # 旧的 2D 画风词会和新风格锁同时留在提示词里，两张风格互相打架。
+    preset_style_segments = [
+        segment.strip()
+        for segment in preset_camera.split(",")
+        if segment.strip() and _STYLE_MEDIUM_RE.search(segment)
+    ] if preset_camera and preset_camera != lock_camera else []
+    lock_key = lock_camera.lower()
+    changed = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key, value in list(item.items()):
+            if isinstance(value, str):
+                cleaned = _STYLE_CONFLICT_RE.sub("", value)
+                if preset_camera and preset_camera != lock_camera:
+                    cleaned = cleaned.replace(preset_camera, "")
+                    for segment in preset_style_segments:
+                        if segment.lower() in cleaned.lower():
+                            cleaned = re.sub(re.escape(segment), "", cleaned, flags=re.IGNORECASE)
+                cleaned = _STYLE_WS_RE.sub(" ", cleaned)
+                cleaned = _STYLE_COMMA_RE.sub(", ", cleaned).strip(" ,;")
+                item[key] = cleaned
+        tech = str(item.get("technical_specs") or "").strip(" ,;")
+        if lock_key and lock_key in tech.lower():
+            item["technical_specs"] = tech
+        else:
+            item["technical_specs"] = ((tech + ", " + lock_camera).strip(", ")
+                                       if tech else lock_camera)
+        changed += 1
+    if changed:
+        logger.info("🔒 [副脑] 风格已锁定：%s", lock_camera[:100])
+    return items
 
 
 class PromptOptimizer:
@@ -72,19 +145,28 @@ class PromptOptimizer:
         self.config = config
 
     async def optimize(self, raw_action: str, count: int = 1, session: Optional[aiohttp.ClientSession] = None, has_reference: bool = False, selfie: bool = False, external_camera: bool = False, locked_outfit: str = "", scene_lock: str = "", pose_lock: str = "") -> list:
+        style_choice = getattr(self.config, "optimizer_style", "手机日常原生感")
+        custom_prompt = getattr(self.config, "optimizer_custom_prompt", "").strip()
+        try:
+            style_data, _quality_guardrails = self._build_style_data(style_choice, custom_prompt)
+        except Exception as exc:  # 配置异常也不能把「关闭副脑/降级」路径带崩
+            logger.warning("⚠️ [副脑] 风格插槽构建失败，本张不加风格锁: %r", exc)
+            style_data, _quality_guardrails = {}, ""
+        _style_lock = str(STYLE_LOCK_TEXTS.get(style_choice) or "").strip()
+
         if not getattr(self.config, "enable_optimizer", True):
-            return locked_prompt(raw_action, scene_lock, pose_lock) * count
+            return locked_prompt(raw_action, scene_lock, pose_lock, _style_lock) * count
 
         if not raw_action or raw_action.strip() == "":
-            return locked_prompt(raw_action, scene_lock, pose_lock) * count
+            return locked_prompt(raw_action, scene_lock, pose_lock, _style_lock) * count
 
         chain = self.config.chains.get("optimizer", [])
         provider = self.config.get_provider(chain[0]) if chain else (self.config.providers[0] if self.config.providers else None)
         if not provider or not provider.base_url:
-            return locked_prompt(raw_action, scene_lock, pose_lock) * count
+            return locked_prompt(raw_action, scene_lock, pose_lock, _style_lock) * count
         if provider.api_type == APIType.GEMINI_OFFICIAL:
             logger.warning("⚠️ [副脑] Gemini 官方节点不兼容 OpenAI Chat 优化协议，已跳过副脑优化。")
-            return locked_prompt(raw_action, scene_lock, pose_lock) * count
+            return locked_prompt(raw_action, scene_lock, pose_lock, _style_lock) * count
 
         endpoint = build_chat_completions_endpoint(provider.base_url)
         api_key = next_api_key(
@@ -93,16 +175,9 @@ class PromptOptimizer:
             scope=f"optimizer:{provider.api_type}:{provider.base_url}",
         )
         if not endpoint or not api_key:
-            return locked_prompt(raw_action, scene_lock, pose_lock) * count
+            return locked_prompt(raw_action, scene_lock, pose_lock, _style_lock) * count
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-        # ==========================================
-        # 🚀 动态风格插槽系统 (Dynamic Style Engine)
-        # ==========================================
-        style_choice = getattr(self.config, "optimizer_style", "手机日常原生感")
-        custom_prompt = getattr(self.config, "optimizer_custom_prompt", "").strip()
-        custom_style_hint = custom_prompt
-        style_data, _quality_guardrails = self._build_style_data(style_choice, custom_prompt)
         style_data, _ref_rule, _scene_lock, _pose_lock = self._apply_reference_rules(
             style_data, has_reference, selfie, external_camera, locked_outfit, scene_lock, pose_lock
         )
@@ -138,6 +213,7 @@ class PromptOptimizer:
                     if isinstance(data, dict) and "choices" in data and len(data["choices"]) > 0:
                         raw_content = data["choices"][0]["message"]["content"].strip()
                         items = self._parse_items(raw_content, count, _scene_lock, _pose_lock)
+                        items = apply_style_lock(items, style_data, style_choice)
 
                         results = []
                         anti_collage = "single image, one natural coherent frame, no grid, no collage, no split screen, no multiple views"
@@ -156,24 +232,30 @@ class PromptOptimizer:
 
                         while len(results) < count:
                             results.append(results[0] if results
-                                           else locked_prompt(raw_action, _scene_lock, _pose_lock)[0])
+                                           else locked_prompt(raw_action, _scene_lock, _pose_lock, _style_lock)[0])
 
                         logger.info(f"✨ [副脑] 成功重构并提取 {len(results[:count])} 组【{style_choice}】提示词！")
                         return results[:count]
 
             except Exception as e:
                 logger.warning(f"⚠️ [副脑降级] ({str(e)})")
-                return locked_prompt(raw_action, _scene_lock, _pose_lock) * count
+                return locked_prompt(raw_action, _scene_lock, _pose_lock, _style_lock) * count
 
-            return locked_prompt(raw_action, _scene_lock, _pose_lock) * count
+            return locked_prompt(raw_action, _scene_lock, _pose_lock, _style_lock) * count
         finally:
             if close_session and session_obj is not None:
                 await session_obj.close()
 
     def _build_style_data(self, style_choice: str, custom_prompt: str):
         """组装风格插槽，返回 (style_data, universal_quality_guardrails)。"""
-        if custom_prompt and re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", custom_prompt):
-            custom_style_hint = "the custom visual style described by the user, translated into natural English"
+        # 自定义模式必须把用户写的风格带进提示词：以前只写占位描述（模型看不到内容），
+        # 纯英文自定义提示词还会因为变量没赋值抛 UnboundLocalError。
+        custom_style_hint = ""
+        if custom_prompt:
+            hint = "the custom visual style described by the user"
+            if re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", custom_prompt):
+                hint += ", translated into natural English"
+            custom_style_hint = hint + ": " + custom_prompt
 
         universal_quality_guardrails = (
             "single coherent image, physically plausible perspective, natural proportions, believable camera distance, "
@@ -455,7 +537,15 @@ OUTPUT FORMAT:
                 items = prompt_data
             elif isinstance(prompt_data, dict):
                 if count == 1:
-                    items = [prompt_data]
+                    # 模型常把单个对象也包一层 {"results": [{...}]}；直接取外层的话，
+                    # 下面按字段拼提示词时一个内容字段都拿不到，整句只剩风格锁。
+                    nested_results = prompt_data.get("results")
+                    if isinstance(nested_results, list) and nested_results and isinstance(nested_results[0], dict):
+                        items = [nested_results[0]]
+                    elif isinstance(nested_results, dict) and nested_results:
+                        items = [nested_results]
+                    else:
+                        items = [prompt_data]
                 else:
                     items = prompt_data.get("results", [])
             else:

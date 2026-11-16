@@ -719,7 +719,7 @@ class PluginImageReturnTest(unittest.IsolatedAsyncioTestCase):
     async def _optimize(self, prompt, count):
         return [f"{prompt} #{index}" for index in range(1, count + 1)]
 
-    async def _process_refs(self, refs, session=None):
+    async def _process_refs(self, refs, session=None, allow_local_refs=False):
         return [f"safe:{ref}" for ref in refs]
 
     async def test_generate_images_for_plugin_returns_images_without_sending(self):
@@ -1225,7 +1225,7 @@ class PresetEventHandlerTest(unittest.IsolatedAsyncioTestCase):
         plugin._build_image_success_components = lambda result, elapsed: [{"result": result.image_url}]
         return plugin
 
-    async def _process_refs(self, refs, session=None):
+    async def _process_refs(self, refs, session=None, allow_local_refs=False):
         return []
 
     async def test_wake_command_with_prefix_stripped_triggers_preset_generation(self):
@@ -1304,8 +1304,9 @@ class CommandPendingSendTest(unittest.IsolatedAsyncioTestCase):
         )
         plugin.cmd_parser = main_module.CommandParser()
         plugin.prompt_optimizer = types.SimpleNamespace(
-            optimize=lambda prompt, count, session=None: self._optimize(prompt, count)
+            optimize=lambda prompt, count, session=None, **kwargs: self._optimize(prompt, count)
         )
+        plugin._load_locked_outfit = lambda: ""
         plugin.persona_manager = types.SimpleNamespace(
             build_persona_prompt=lambda action: (f"persona base, {action}", {"persona_ref": "persona-default.png"})
         )
@@ -1334,7 +1335,7 @@ class CommandPendingSendTest(unittest.IsolatedAsyncioTestCase):
         plugin._create_background_task = create_background_task
         return plugin
 
-    async def _process_refs(self, refs, session=None):
+    async def _process_refs(self, refs, session=None, allow_local_refs=False):
         return []
 
     async def _optimize(self, prompt, count):
@@ -2708,8 +2709,9 @@ class ReliabilityBoundaryRegressionTest(unittest.IsolatedAsyncioTestCase):
         plugin._get_event_images = lambda *args, **kwargs: ["reference"]
         plugin._extract_command_message = lambda event, command, fallback="": fallback or "prompt"
         plugin.prompt_optimizer = types.SimpleNamespace(
-            optimize=lambda prompt, count, session=None: self._return_prompts(prompt)
+            optimize=lambda prompt, count, session=None, **kwargs: self._return_prompts(prompt)
         )
+        plugin._load_locked_outfit = lambda: ""
         plugin.persona_manager = types.SimpleNamespace(
             build_persona_prompt=lambda prompt: (prompt, {})
         )

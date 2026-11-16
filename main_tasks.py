@@ -252,7 +252,7 @@ class OmniDrawTaskMixin:
             image_bytes, content_type = split_data_url(image_url)
             save_dir = os.path.join(self.data_dir, "temp_images")
             file_path = save_image_bytes(image_bytes, save_dir, image_url, "img", 0, content_type)
-            self._prune_cache_if_needed("temp_images", protected_paths=[file_path])
+            self._schedule_cache_prune("temp_images", [file_path])
             return Image.fromFileSystem(file_path)
         if image_url.startswith("http"):
             return Image.fromURL(image_url)
@@ -494,7 +494,12 @@ class OmniDrawTaskMixin:
                 return image_bytes, response.headers.get("Content-Type", ""), current_url
         raise ValueError("参考图重定向次数过多")
 
-    async def _process_and_save_images(self, raw_images: Iterable[str], session: Optional[aiohttp.ClientSession] = None) -> List[str]:
+    async def _process_and_save_images(
+        self,
+        raw_images: Iterable[str],
+        session: Optional[aiohttp.ClientSession] = None,
+        allow_local_refs: bool = False,
+    ) -> List[str]:
         processed_paths = []
         if not raw_images:
             return processed_paths
@@ -542,7 +547,14 @@ class OmniDrawTaskMixin:
 
                 if not lowered_ref.startswith(("http://", "https://")):
                     try:
-                        processed_paths.append(self._validate_local_image_path(img_ref))
+                        # [2026-11-16] 事件/命令带来的本地图只允许落在插件 data_dir 内；
+                        # 只有受信任的插件 API（allow_local_refs=True，如 amo 的 plugin_data）放行。
+                        processed_paths.append(
+                            self._validate_local_image_path(
+                                img_ref,
+                                allowed_root="" if allow_local_refs else self.data_dir,
+                            )
+                        )
                     except (OSError, ValueError) as exc:
                         logger.warning(f"[OmniDraw] 本地参考图处理失败: {exc}")
                     continue
@@ -644,6 +656,7 @@ class OmniDrawTaskMixin:
                     scene_lock=scene_lock,
                     pose_lock=pose_lock,
                     negative_prompt=negative_prompt,
+                    allow_local_refs=allow_local_refs,
                 )
             else:
                 generation = await self._run_text2img_generation(
@@ -660,6 +673,7 @@ class OmniDrawTaskMixin:
                     scene_lock=scene_lock,
                     pose_lock=pose_lock,
                     negative_prompt=negative_prompt,
+                    allow_local_refs=allow_local_refs,
                 )
 
             response, valid_results = self._plugin_generation_response(generation)
@@ -856,7 +870,7 @@ class OmniDrawTaskMixin:
                 content_type = sniff_image_content_type(image_bytes, content_type)
                 save_dir = os.path.join(self.data_dir, "temp_images")
                 file_path = save_image_bytes(image_bytes, save_dir, image_url, "plugin", index, content_type)
-                self._prune_cache_if_needed("temp_images", protected_paths=[file_path])
+                self._schedule_cache_prune("temp_images", [file_path])
             except Exception as exc:
                 logger.warning(f"[OmniDraw] 插件生图结果落盘失败: {exc}")
         elif image_url.startswith("http"):

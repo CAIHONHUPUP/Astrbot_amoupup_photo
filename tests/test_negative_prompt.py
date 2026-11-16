@@ -9,6 +9,23 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+# 本文件可以单独跑：models/utils 会导入 astrbot，不能依赖别的测试文件先 stub。
+if "astrbot" not in sys.modules:
+    import logging as _logging
+    import types as _types
+
+    _astrbot = _types.ModuleType("astrbot")
+    _astrbot_api = _types.ModuleType("astrbot.api")
+    _astrbot_api.logger = _logging.getLogger("test")
+    _astrbot_event = _types.ModuleType("astrbot.api.event")
+    _astrbot_event.AstrMessageEvent = object
+    _astrbot.api = _astrbot_api
+    sys.modules.update({
+        "astrbot": _astrbot,
+        "astrbot.api": _astrbot_api,
+        "astrbot.api.event": _astrbot_event,
+    })
+
 from core.negative_prompt import (  # noqa: E402
     DEFAULT_BASE,
     DEFAULT_ITEM,
@@ -93,6 +110,19 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(cfg.room_negative, "拥挤")
         self.assertEqual(cfg.item_negative, "穿模")
         self.assertTrue(cfg.negative_prompt_enabled)
+
+
+class SchemaDefaultTests(unittest.TestCase):
+    def test_schema_defaults_match_code_defaults(self):
+        """配置页默认值与代码兜底默认值必须一致（2026-11-16 负向词去掉二次元/插画）。"""
+        import json
+        import pathlib
+
+        schema = json.loads((pathlib.Path(ROOT) / "_conf_schema.json").read_text(encoding="utf-8"))
+        items = schema["image_generation"]["items"]
+        self.assertEqual(items["base_negative"]["default"], DEFAULT_BASE)
+        self.assertEqual(items["room_negative"]["default"], DEFAULT_ROOM)
+        self.assertEqual(items["item_negative"]["default"], DEFAULT_ITEM)
 
 
 if __name__ == "__main__":
