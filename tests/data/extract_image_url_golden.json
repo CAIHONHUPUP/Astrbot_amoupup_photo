@@ -1,0 +1,47 @@
+{
+ "b64_json": {
+  "result": "data:image/png;base64,iVBORw0KGgp4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eA=="
+ },
+ "b64_short_png": {
+  "result": "data:image/png;base64,iVBORw0KGgp4eHh4eHh4eA=="
+ },
+ "bare_url_text": {
+  "result": "https://cdn.example.com/a.jpg"
+ },
+ "data_url": {
+  "result": "data:image/png;base64,iVBORw0KGgp4eHh4eHh4eA=="
+ },
+ "empty": {
+  "result": ""
+ },
+ "gemini_bad_mime": {
+  "result": ""
+ },
+ "gemini_inline": {
+  "result": "data:image/png;base64,iVBORw0KGgp4eHh4eHh4eA=="
+ },
+ "image_generation_call": {
+  "result": "data:image/png;base64,iVBORw0KGgp4eHh4eHh4eA=="
+ },
+ "invalid": {
+  "result": ""
+ },
+ "json_text": {
+  "result": "https://cdn.example.com/b.png"
+ },
+ "markdown": {
+  "result": "https://cdn.example.com/a.webp"
+ },
+ "max_bytes_error": {
+  "error": "ValueError: 返回图片超过 0 MiB 上限，请减少帧数或尺寸。"
+ },
+ "nested_list": {
+  "result": "https://x.example/y.png"
+ },
+ "plain_url": {
+  "result": "https://cdn.example.com/a.png"
+ },
+ "relative_uri": {
+  "result": "https://api.example.com/img/a.png"
+ }
+}

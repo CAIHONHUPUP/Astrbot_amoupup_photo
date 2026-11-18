@@ -2,6 +2,7 @@
 import asyncio
 import aiohttp
 import base64
+import binascii
 import json
 import ipaddress
 import mimetypes
@@ -311,7 +312,7 @@ async def read_response_bytes_limited(response: Any, max_bytes: int = MAX_PROVID
         try:
             if int(content_length) > max_bytes:
                 raise RuntimeError(f"响应体超过 {max_bytes} 字节上限")
-        except ValueError:
+        except ValueError:  # silent: Content-Length 不是整数时不做上限判断
             pass
 
     chunks = []
@@ -514,200 +515,207 @@ def summarize_response_text_for_log(value: str, max_string_length: int = 500) ->
         return summarize_text_for_log(value, max_string_length=max_string_length)
 
 
+def _check_inline_size(value: str, max_inline_bytes: Optional[int]) -> None:
+    if max_inline_bytes is not None and len(re.sub(r"\s+", "", value)) > 4 * ((max_inline_bytes + 2) // 3):
+        raise ValueError(f"返回图片超过 {max_inline_bytes // 1024 // 1024} MiB 上限，请减少帧数或尺寸。")
+
+
+def _image_looks_like_base64(value: str, max_inline_bytes: Optional[int]) -> bool:
+    text = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9+/=\s]+", text):
+        return False
+    _check_inline_size(text, max_inline_bytes)
+    try:
+        decoded = base64.b64decode(text, validate=False)
+        return len(text) >= 80 or bool(_image_kind(decoded[:32]))
+    except Exception:
+        return False
+
+
+def _image_from_text(text: str, base_url: str, max_inline_bytes: Optional[int]) -> str:
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if text.startswith("data:image"):
+        return text
+    if text.startswith("{") or text.startswith("["):
+        try:
+            nested = json.loads(text)
+        except Exception:
+            nested = None
+        if nested is not None:
+            nested_image = _walk_image_value(nested, base_url, max_inline_bytes)
+            if nested_image:
+                return nested_image
+    markdown_match = re.search(r"!\[[^\]]*\]\((data:image[^)]+|https?://[^)\s]+)\)", text)
+    if markdown_match:
+        return resolve_response_url(markdown_match.group(1), base_url)
+    url_match = re.search(r"(https?://[^\s\]\)\"\']+)", text)
+    if url_match:
+        candidate = url_match.group(1).rstrip(".,;:!?，。；：！？>")
+        parsed = urlparse(candidate)
+        path = parsed.path.lower()
+        query = parsed.query.lower()
+        if (
+            text == candidate
+            or re.search(r"\.(?:png|jpe?g|webp|gif|bmp|avif|tiff?)(?:$|/)", path)
+            or "format=image" in query
+        ):
+            return resolve_response_url(candidate, base_url)
+    return ""
+
+
+def _coerce_image_value(value: Any, base_url: str, max_inline_bytes: Optional[int],
+                        assume_base64: bool = False) -> str:
+    if isinstance(value, str):
+        text = value.strip()
+        extracted = _image_from_text(text, base_url, max_inline_bytes)
+        if extracted:
+            return extracted
+        if assume_base64 and _image_looks_like_base64(text, max_inline_bytes):
+            compact = re.sub(r"\s+", "", text)
+            header = base64.b64decode(compact[:48], validate=False)
+            kind = _image_kind(header) or "png"
+            return f"data:image/{kind};base64," + compact
+        return ""
+    return _walk_image_value(value, base_url, max_inline_bytes)
+
+
+def _inline_data_image(value: Any, max_inline_bytes: Optional[int]) -> str:
+    if not isinstance(value, dict):
+        return ""
+    if "mimeType" not in value and "mime_type" not in value:
+        return ""
+    data_value = value.get("data")
+    if not isinstance(data_value, str):
+        return ""
+    data = data_value.strip()
+    if not data:
+        return ""
+    mime_type = str(value.get("mimeType") or value.get("mime_type") or "image/png").strip() or "image/png"
+    if not mime_type.split(";", 1)[0].lower().startswith("image/"):
+        return ""
+    compact_data = re.sub(r"\s+", "", data)
+    _check_inline_size(compact_data, max_inline_bytes)
+    try:
+        base64.b64decode(compact_data, validate=True)
+    except Exception:
+        return ""
+    return f"data:{mime_type};base64,{compact_data}"
+
+
+def _gemini_candidates_image(value: Any, max_inline_bytes: Optional[int]) -> str:
+    if not isinstance(value, dict):
+        return ""
+    candidates = value.get("candidates")
+    if not isinstance(candidates, list):
+        return ""
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get("content") or {}
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if not isinstance(parts, list):
+            continue
+        last_inline_image = ""
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            for key in ("inlineData", "inline_data"):
+                image = _inline_data_image(part.get(key), max_inline_bytes)
+                if image:
+                    last_inline_image = image
+        if last_inline_image:
+            return last_inline_image
+    return ""
+
+
+def _walk_image_value(value: Any, base_url: str, max_inline_bytes: Optional[int] = None) -> str:
+    if isinstance(value, str):
+        return _image_from_text(value, base_url, max_inline_bytes)
+    if isinstance(value, list):
+        for item in value:
+            image = _walk_image_value(item, base_url, max_inline_bytes)
+            if image:
+                return image
+        return ""
+    if not isinstance(value, dict):
+        return ""
+
+    gemini_image = _gemini_candidates_image(value, max_inline_bytes)
+    if gemini_image:
+        return gemini_image
+
+    for key in ("inlineData", "inline_data"):
+        image = _inline_data_image(value.get(key), max_inline_bytes)
+        if image:
+            return image
+
+    if value.get("type") == "image_generation_call" and value.get("result"):
+        image = _coerce_image_value(value.get("result"), base_url, max_inline_bytes, assume_base64=True)
+        if image:
+            return image
+
+    for key in ("b64_json", "base64", "image_base64", "image_data", "binary_data_base64"):
+        if key in value:
+            image = _coerce_image_value(value.get(key), base_url, max_inline_bytes, assume_base64=True)
+            if image:
+                return image
+
+    if "image" in value:
+        image_value = value.get("image")
+        image = _coerce_image_value(image_value, base_url, max_inline_bytes, assume_base64=True)
+        if image:
+            return image
+        if isinstance(image_value, str):
+            text = image_value.strip()
+            if re.search(r"\.(?:png|jpe?g|webp|gif|bmp|avif)(?:[?#].*)?$", text, re.IGNORECASE):
+                return resolve_response_url(text, base_url)
+
+    for key in ("url", "image_url", "uri"):
+        if key in value:
+            nested = value.get(key)
+            if isinstance(nested, dict) and "url" in nested:
+                nested = nested.get("url")
+            if isinstance(nested, str) and nested.strip():
+                image = _image_from_text(nested, base_url, max_inline_bytes)
+                return image or resolve_response_url(nested, base_url)
+            image = _coerce_image_value(nested, base_url, max_inline_bytes)
+            if image:
+                return image
+
+    for key in (
+        "data",
+        "images",
+        "image",
+        "output",
+        "output_text",
+        "result",
+        "results",
+        "choices",
+        "message",
+        "content",
+        "text",
+        "candidates",
+        "parts",
+        "inlineData",
+        "inline_data",
+        "artifacts",
+        "generations",
+    ):
+        if key in value:
+            image = _walk_image_value(value.get(key), base_url, max_inline_bytes)
+            if image:
+                return image
+
+    return ""
+
+
 def extract_image_url_from_response(
     payload: Any, base_url: str, *, max_inline_bytes: Optional[int] = None,
 ) -> str:
     """Extract an image URL or data URL from common image/chat/responses shapes."""
-
-    def check_inline_size(value: str) -> None:
-        if max_inline_bytes is not None and len(re.sub(r"\s+", "", value)) > 4 * ((max_inline_bytes + 2) // 3):
-            raise ValueError(f"返回图片超过 {max_inline_bytes // 1024 // 1024} MiB 上限，请减少帧数或尺寸。")
-
-    def likely_base64(value: str) -> bool:
-        text = value.strip()
-        if not re.fullmatch(r"[A-Za-z0-9+/=\s]+", text):
-            return False
-        check_inline_size(text)
-        try:
-            decoded = base64.b64decode(text, validate=False)
-            return len(text) >= 80 or bool(_image_kind(decoded[:32]))
-        except Exception:
-            return False
-
-    def from_text(text: str) -> str:
-        text = str(text or "").strip()
-        if not text:
-            return ""
-        if text.startswith("data:image"):
-            return text
-        if text.startswith("{") or text.startswith("["):
-            try:
-                nested = json.loads(text)
-            except Exception:
-                nested = None
-            if nested is not None:
-                nested_image = walk(nested)
-                if nested_image:
-                    return nested_image
-        markdown_match = re.search(r"!\[[^\]]*\]\((data:image[^)]+|https?://[^)\s]+)\)", text)
-        if markdown_match:
-            return resolve_response_url(markdown_match.group(1), base_url)
-        url_match = re.search(r"(https?://[^\s\]\)\"']+)", text)
-        if url_match:
-            candidate = url_match.group(1).rstrip(".,;:!?，。；：！？>")
-            parsed = urlparse(candidate)
-            path = parsed.path.lower()
-            query = parsed.query.lower()
-            if (
-                text == candidate
-                or re.search(r"\.(?:png|jpe?g|webp|gif|bmp|avif|tiff?)(?:$|/)", path)
-                or "format=image" in query
-            ):
-                return resolve_response_url(candidate, base_url)
-        return ""
-
-    def coerce_image_value(value: Any, assume_base64: bool = False) -> str:
-        if isinstance(value, str):
-            text = value.strip()
-            extracted = from_text(text)
-            if extracted:
-                return extracted
-            if assume_base64 and likely_base64(text):
-                compact = re.sub(r"\s+", "", text)
-                header = base64.b64decode(compact[:48], validate=False)
-                kind = _image_kind(header) or "png"
-                return f"data:image/{kind};base64," + compact
-            return ""
-        return walk(value)
-
-    def from_inline_data(value: Any) -> str:
-        if not isinstance(value, dict):
-            return ""
-        if "mimeType" not in value and "mime_type" not in value:
-            return ""
-        data_value = value.get("data")
-        if not isinstance(data_value, str):
-            return ""
-        data = data_value.strip()
-        if not data:
-            return ""
-        mime_type = str(value.get("mimeType") or value.get("mime_type") or "image/png").strip() or "image/png"
-        if not mime_type.split(";", 1)[0].lower().startswith("image/"):
-            return ""
-        compact_data = re.sub(r"\s+", "", data)
-        check_inline_size(compact_data)
-        try:
-            base64.b64decode(compact_data, validate=True)
-        except Exception:
-            return ""
-        return f"data:{mime_type};base64,{compact_data}"
-
-    def from_gemini_candidates(value: Any) -> str:
-        if not isinstance(value, dict):
-            return ""
-        candidates = value.get("candidates")
-        if not isinstance(candidates, list):
-            return ""
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            content = candidate.get("content") or {}
-            parts = content.get("parts") if isinstance(content, dict) else None
-            if not isinstance(parts, list):
-                continue
-            last_inline_image = ""
-            for part in parts:
-                if not isinstance(part, dict):
-                    continue
-                for key in ("inlineData", "inline_data"):
-                    image = from_inline_data(part.get(key))
-                    if image:
-                        last_inline_image = image
-            if last_inline_image:
-                return last_inline_image
-        return ""
-
-    def walk(value: Any) -> str:
-        if isinstance(value, str):
-            return from_text(value)
-        if isinstance(value, list):
-            for item in value:
-                image = walk(item)
-                if image:
-                    return image
-            return ""
-        if not isinstance(value, dict):
-            return ""
-
-        gemini_image = from_gemini_candidates(value)
-        if gemini_image:
-            return gemini_image
-
-        for key in ("inlineData", "inline_data"):
-            image = from_inline_data(value.get(key))
-            if image:
-                return image
-
-        if value.get("type") == "image_generation_call" and value.get("result"):
-            image = coerce_image_value(value.get("result"), assume_base64=True)
-            if image:
-                return image
-
-        for key in ("b64_json", "base64", "image_base64", "image_data", "binary_data_base64"):
-            if key in value:
-                image = coerce_image_value(value.get(key), assume_base64=True)
-                if image:
-                    return image
-
-        if "image" in value:
-            image_value = value.get("image")
-            image = coerce_image_value(image_value, assume_base64=True)
-            if image:
-                return image
-            if isinstance(image_value, str):
-                text = image_value.strip()
-                if re.search(r"\.(?:png|jpe?g|webp|gif|bmp|avif)(?:[?#].*)?$", text, re.IGNORECASE):
-                    return resolve_response_url(text, base_url)
-
-        for key in ("url", "image_url", "uri"):
-            if key in value:
-                nested = value.get(key)
-                if isinstance(nested, dict) and "url" in nested:
-                    nested = nested.get("url")
-                if isinstance(nested, str) and nested.strip():
-                    image = from_text(nested)
-                    return image or resolve_response_url(nested, base_url)
-                image = coerce_image_value(nested)
-                if image:
-                    return image
-
-        for key in (
-            "data",
-            "images",
-            "image",
-            "output",
-            "output_text",
-            "result",
-            "results",
-            "choices",
-            "message",
-            "content",
-            "text",
-            "candidates",
-            "parts",
-            "inlineData",
-            "inline_data",
-            "artifacts",
-            "generations",
-        ):
-            if key in value:
-                image = walk(value.get(key))
-                if image:
-                    return image
-
-        return ""
-
-    return walk(payload)
+    return _walk_image_value(payload, base_url, max_inline_bytes)
 
 
 def validate_gif_result(image_ref: str) -> str:
@@ -724,7 +732,7 @@ def validate_gif_result(image_ref: str) -> str:
         raise ValueError("GIF 返回文件超过 20 MiB 上限，请减少帧数或尺寸。")
     try:
         payload = base64.b64decode(compact, validate=True)
-    except (ValueError, base64.binascii.Error) as exc:
+    except (ValueError, binascii.Error) as exc:
         raise ValueError("GIF 返回数据的 Base64 编码无效。") from exc
     if len(payload) > MAX_IMAGE_BYTES:
         raise ValueError("GIF 返回文件超过 20 MiB 上限，请减少帧数或尺寸。")
@@ -874,8 +882,14 @@ class BaseProvider(ABC):
             if value:
                 refs.append(str(value))
 
-        seen = set()
-        return [ref for ref in refs if not (ref in seen or seen.add(ref))]
+        seen: set[str] = set()
+        unique: List[str] = []
+        for ref in refs:
+            if ref in seen:
+                continue
+            seen.add(ref)
+            unique.append(ref)
+        return unique
 
     @abstractmethod
     async def generate_image(self, prompt: str, **kwargs: Any) -> str:

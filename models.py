@@ -1,5 +1,5 @@
 """
-AstrBot 万象画卷插件 - 数据模型与配置归一化。
+AstrBot「我能永远定格你」- 数据模型与配置归一化。
 """
 import binascii
 import math
@@ -24,9 +24,9 @@ from .constants import (
 )
 from .utils import save_image_bytes, split_data_url
 
-PLUGIN_NAME = "astrbot_plugin_omnidraw"
-PLUGIN_AUTHOR = "雪碧bir"
-PLUGIN_VERSION = "3.5.0"
+PLUGIN_NAME = "Astrbot_amoupup_photo"
+PLUGIN_AUTHOR = "彩虹upup"
+PLUGIN_VERSION = "3.6.0"
 DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS = 24
 DEFAULT_MAX_CACHE_SIZE_MB = 512
 
@@ -120,25 +120,7 @@ class PluginConfig:
         providers = _normalize_provider_configs(config_dict, "providers", is_video=False)
         video_providers = _normalize_provider_configs(config_dict, "video_providers", is_video=True)
 
-        presets_dict = {}
-        normalized_presets = []
-        for preset in _as_list(config_dict.get("presets", [])):
-            if isinstance(preset, dict):
-                name = str(preset.get("name", "")).strip()
-                prompt = str(preset.get("prompt", "")).strip()
-            elif isinstance(preset, str):
-                separator = ":" if ":" in preset else ("：" if "：" in preset else "")
-                if not separator:
-                    continue
-                name, prompt = preset.split(separator, 1)
-                name = name.strip()
-                prompt = prompt.strip()
-            else:
-                continue
-            if name:
-                presets_dict[name] = prompt
-                normalized_presets.append(f"{name}:{prompt}")
-        config_dict["presets"] = normalized_presets
+        presets_dict = _normalize_presets(config_dict)
 
         persona_conf = _ensure_dict(config_dict, "persona_config")
         opt_conf = _ensure_dict(config_dict, "optimizer_config")
@@ -181,88 +163,19 @@ class PluginConfig:
         opt_conf["optimizer_model"] = optimizer_model
         opt_conf["optimizer_style"] = optimizer_style
         opt_conf["max_batch_count"] = max_batch_count
-        usable_users = _merge_unique_values(
-            perm_conf.get("usable_users", ""),
-            perm_conf.get("access_users", ""),
-            perm_conf.get("use_whitelist", ""),
-        )
-        user_whitelist = _merge_unique_values(
-            perm_conf.get("allowed_users", ""),
-            perm_conf.get("unlimited_users", ""),
-            perm_conf.get("user_whitelist", ""),
-        )
-        blocked_users = _merge_unique_values(
-            perm_conf.get("blocked_users", ""),
-            perm_conf.get("user_blacklist", ""),
-        )
-        unlimited_groups = _merge_unique_values(
-            perm_conf.get("unlimited_groups", ""),
-            perm_conf.get("group_whitelist", ""),
-        )
-        perm_conf["usable_users"] = "\n".join(usable_users)
-        perm_conf["allowed_users"] = "\n".join(user_whitelist)
-        perm_conf["blocked_users"] = "\n".join(blocked_users)
-        perm_conf["unlimited_groups"] = "\n".join(unlimited_groups)
+        usable_users, user_whitelist, blocked_users, unlimited_groups = (
+            _apply_permission_config(perm_conf))
 
-        enable_daily_limit = _to_bool(usage_conf.get("enable_daily_limit", False))
-        daily_image_limit = _to_int(usage_conf.get("daily_image_limit", 20), 20, minimum=0)
-        enable_checkin = _to_bool(usage_conf.get("enable_checkin", False))
-        checkin_bonus_min = _to_int(usage_conf.get("checkin_bonus_min", 1), 1, minimum=0)
-        checkin_bonus_max = _to_int(usage_conf.get("checkin_bonus_max", 3), 3, minimum=0)
-        if checkin_bonus_max < checkin_bonus_min:
-            checkin_bonus_max = checkin_bonus_min
-        usage_conf["enable_daily_limit"] = enable_daily_limit
-        usage_conf["daily_image_limit"] = daily_image_limit
-        usage_conf["enable_checkin"] = enable_checkin
-        usage_conf["checkin_bonus_min"] = checkin_bonus_min
-        usage_conf["checkin_bonus_max"] = checkin_bonus_max
+        (enable_daily_limit, daily_image_limit, enable_checkin,
+         checkin_bonus_min, checkin_bonus_max) = _apply_usage_config(usage_conf)
 
-        enable_scheduled_cleanup = _to_bool(cache_conf.get("enable_scheduled_cleanup", False) or False)
-        scheduled_cleanup_interval_hours = _to_int(
-            cache_conf.get("scheduled_cleanup_interval_hours", DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS),
-            DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
-            minimum=1,
-        )
-        enable_size_limit_cleanup = _to_bool(cache_conf.get("enable_size_limit_cleanup", False) or False)
-        max_cache_size_mb = _to_int(
-            cache_conf.get("max_cache_size_mb", DEFAULT_MAX_CACHE_SIZE_MB),
-            DEFAULT_MAX_CACHE_SIZE_MB,
-            minimum=1,
-        )
-        cache_conf["enable_scheduled_cleanup"] = enable_scheduled_cleanup
-        cache_conf["scheduled_cleanup_interval_hours"] = scheduled_cleanup_interval_hours
-        cache_conf["enable_size_limit_cleanup"] = enable_size_limit_cleanup
-        cache_conf["max_cache_size_mb"] = max_cache_size_mb
+        (enable_scheduled_cleanup, scheduled_cleanup_interval_hours,
+         enable_size_limit_cleanup, max_cache_size_mb) = _apply_cache_config(cache_conf)
 
-        draw_pending_message = _normalize_reply_text(
-            reply_conf.get("draw_pending_message"),
-            DEFAULT_DRAW_PENDING_MESSAGE,
-        )
-        selfie_pending_message = _normalize_reply_text(
-            reply_conf.get("selfie_pending_message"),
-            DEFAULT_SELFIE_PENDING_MESSAGE,
-        )
-        draw_error_message = _normalize_reply_text(
-            reply_conf.get("draw_error_message"),
-            DEFAULT_DRAW_ERROR_MESSAGE,
-        )
-        selfie_error_message = _normalize_reply_text(
-            reply_conf.get("selfie_error_message"),
-            DEFAULT_SELFIE_ERROR_MESSAGE,
-        )
-        reply_conf["draw_pending_message"] = draw_pending_message
-        reply_conf["selfie_pending_message"] = selfie_pending_message
-        reply_conf["draw_error_message"] = draw_error_message
-        reply_conf["selfie_error_message"] = selfie_error_message
+        (draw_pending_message, selfie_pending_message,
+         draw_error_message, selfie_error_message) = _apply_reply_config(reply_conf)
 
-        try:
-            from .core.negative_prompt import DEFAULT_BASE, DEFAULT_ITEM, DEFAULT_ROOM
-        except Exception:
-            from core.negative_prompt import DEFAULT_BASE, DEFAULT_ITEM, DEFAULT_ROOM
-        neg_conf["negative_prompt_enabled"] = _to_bool(neg_conf.get("negative_prompt_enabled", True))
-        neg_conf["base_negative"] = str(neg_conf.get("base_negative") or DEFAULT_BASE)
-        neg_conf["room_negative"] = str(neg_conf.get("room_negative") or DEFAULT_ROOM)
-        neg_conf["item_negative"] = str(neg_conf.get("item_negative") or DEFAULT_ITEM)
+        _apply_negative_defaults(neg_conf)
         return cls(
             providers=providers,
             video_providers=video_providers,
@@ -805,7 +718,7 @@ def _is_safe_persisted_image_path(image_ref: str, plugin_data_dir: str) -> bool:
 
 
 def _is_page_preview_ref(image_ref: str) -> bool:
-    return "astrbot_plugin_omnidraw/get_image" in str(image_ref)
+    return f"{PLUGIN_NAME}/get_image" in str(image_ref)
 
 
 def _save_data_url_image(data_url: str, refs_dir: str, idx: int) -> str:
@@ -868,3 +781,123 @@ def _cleanup_unused_persona_refs(refs_dir: str, active_refs: List[str]) -> None:
             os.remove(filepath)
         except OSError:
             continue
+
+
+def _normalize_presets(config_dict: Dict[str, Any]) -> Dict[str, str]:
+    presets_dict = {}
+    normalized_presets = []
+    for preset in _as_list(config_dict.get("presets", [])):
+        if isinstance(preset, dict):
+            name = str(preset.get("name", "")).strip()
+            prompt = str(preset.get("prompt", "")).strip()
+        elif isinstance(preset, str):
+            separator = ":" if ":" in preset else ("：" if "：" in preset else "")
+            if not separator:
+                continue
+            name, prompt = preset.split(separator, 1)
+            name = name.strip()
+            prompt = prompt.strip()
+        else:
+            continue
+        if name:
+            presets_dict[name] = prompt
+            normalized_presets.append(f"{name}:{prompt}")
+    config_dict["presets"] = normalized_presets
+    return presets_dict
+
+
+def _apply_permission_config(perm_conf: Dict[str, Any]):
+    usable_users = _merge_unique_values(
+        perm_conf.get("usable_users", ""),
+        perm_conf.get("access_users", ""),
+        perm_conf.get("use_whitelist", ""),
+    )
+    user_whitelist = _merge_unique_values(
+        perm_conf.get("allowed_users", ""),
+        perm_conf.get("unlimited_users", ""),
+        perm_conf.get("user_whitelist", ""),
+    )
+    blocked_users = _merge_unique_values(
+        perm_conf.get("blocked_users", ""),
+        perm_conf.get("user_blacklist", ""),
+    )
+    unlimited_groups = _merge_unique_values(
+        perm_conf.get("unlimited_groups", ""),
+        perm_conf.get("group_whitelist", ""),
+    )
+    perm_conf["usable_users"] = "\n".join(usable_users)
+    perm_conf["allowed_users"] = "\n".join(user_whitelist)
+    perm_conf["blocked_users"] = "\n".join(blocked_users)
+    perm_conf["unlimited_groups"] = "\n".join(unlimited_groups)
+    return usable_users, user_whitelist, blocked_users, unlimited_groups
+
+
+def _apply_usage_config(usage_conf: Dict[str, Any]):
+    enable_daily_limit = _to_bool(usage_conf.get("enable_daily_limit", False))
+    daily_image_limit = _to_int(usage_conf.get("daily_image_limit", 20), 20, minimum=0)
+    enable_checkin = _to_bool(usage_conf.get("enable_checkin", False))
+    checkin_bonus_min = _to_int(usage_conf.get("checkin_bonus_min", 1), 1, minimum=0)
+    checkin_bonus_max = _to_int(usage_conf.get("checkin_bonus_max", 3), 3, minimum=0)
+    if checkin_bonus_max < checkin_bonus_min:
+        checkin_bonus_max = checkin_bonus_min
+    usage_conf["enable_daily_limit"] = enable_daily_limit
+    usage_conf["daily_image_limit"] = daily_image_limit
+    usage_conf["enable_checkin"] = enable_checkin
+    usage_conf["checkin_bonus_min"] = checkin_bonus_min
+    usage_conf["checkin_bonus_max"] = checkin_bonus_max
+    return (enable_daily_limit, daily_image_limit, enable_checkin,
+            checkin_bonus_min, checkin_bonus_max)
+
+
+def _apply_cache_config(cache_conf: Dict[str, Any]):
+    enable_scheduled_cleanup = _to_bool(cache_conf.get("enable_scheduled_cleanup", False) or False)
+    scheduled_cleanup_interval_hours = _to_int(
+        cache_conf.get("scheduled_cleanup_interval_hours", DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS),
+        DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
+        minimum=1,
+    )
+    enable_size_limit_cleanup = _to_bool(cache_conf.get("enable_size_limit_cleanup", False) or False)
+    max_cache_size_mb = _to_int(
+        cache_conf.get("max_cache_size_mb", DEFAULT_MAX_CACHE_SIZE_MB),
+        DEFAULT_MAX_CACHE_SIZE_MB,
+        minimum=1,
+    )
+    cache_conf["enable_scheduled_cleanup"] = enable_scheduled_cleanup
+    cache_conf["scheduled_cleanup_interval_hours"] = scheduled_cleanup_interval_hours
+    cache_conf["enable_size_limit_cleanup"] = enable_size_limit_cleanup
+    cache_conf["max_cache_size_mb"] = max_cache_size_mb
+    return (enable_scheduled_cleanup, scheduled_cleanup_interval_hours,
+            enable_size_limit_cleanup, max_cache_size_mb)
+
+
+def _apply_reply_config(reply_conf: Dict[str, Any]):
+    draw_pending_message = _normalize_reply_text(
+        reply_conf.get("draw_pending_message"),
+        DEFAULT_DRAW_PENDING_MESSAGE,
+    )
+    selfie_pending_message = _normalize_reply_text(
+        reply_conf.get("selfie_pending_message"),
+        DEFAULT_SELFIE_PENDING_MESSAGE,
+    )
+    draw_error_message = _normalize_reply_text(
+        reply_conf.get("draw_error_message"),
+        DEFAULT_DRAW_ERROR_MESSAGE,
+    )
+    selfie_error_message = _normalize_reply_text(
+        reply_conf.get("selfie_error_message"),
+        DEFAULT_SELFIE_ERROR_MESSAGE,
+    )
+    reply_conf["draw_pending_message"] = draw_pending_message
+    reply_conf["selfie_pending_message"] = selfie_pending_message
+    reply_conf["draw_error_message"] = draw_error_message
+    reply_conf["selfie_error_message"] = selfie_error_message
+    return (draw_pending_message, selfie_pending_message,
+            draw_error_message, selfie_error_message)
+
+
+def _apply_negative_defaults(neg_conf: Dict[str, Any]) -> None:
+    from .core.negative_prompt import DEFAULT_BASE, DEFAULT_ITEM, DEFAULT_ROOM
+    neg_conf["negative_prompt_enabled"] = _to_bool(neg_conf.get("negative_prompt_enabled", True))
+    neg_conf["base_negative"] = str(neg_conf.get("base_negative") or DEFAULT_BASE)
+    neg_conf["room_negative"] = str(neg_conf.get("room_negative") or DEFAULT_ROOM)
+    neg_conf["item_negative"] = str(neg_conf.get("item_negative") or DEFAULT_ITEM)

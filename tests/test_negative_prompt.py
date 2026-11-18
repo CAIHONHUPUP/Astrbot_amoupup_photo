@@ -16,10 +16,10 @@ if "astrbot" not in sys.modules:
 
     _astrbot = _types.ModuleType("astrbot")
     _astrbot_api = _types.ModuleType("astrbot.api")
-    _astrbot_api.logger = _logging.getLogger("test")
+    setattr(_astrbot_api, "logger", _logging.getLogger("test"))
     _astrbot_event = _types.ModuleType("astrbot.api.event")
-    _astrbot_event.AstrMessageEvent = object
-    _astrbot.api = _astrbot_api
+    setattr(_astrbot_event, "AstrMessageEvent", object)
+    setattr(_astrbot, "api", _astrbot_api)
     sys.modules.update({
         "astrbot": _astrbot,
         "astrbot.api": _astrbot_api,
@@ -97,7 +97,7 @@ class ConfigTests(unittest.TestCase):
         parent = os.path.dirname(ROOT)
         if parent not in sys.path:
             sys.path.insert(0, parent)
-        from astrbot_plugin_omnidraw.models import PluginConfig
+        from Astrbot_amoupup_photo.models import PluginConfig
         cfg = PluginConfig.from_dict({
             "image_generation": {
                 "negative_prompt_enabled": True,

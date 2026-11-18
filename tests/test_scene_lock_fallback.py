@@ -35,8 +35,8 @@ locked_prompt = optimizer_mod.locked_prompt
 
 class _Config:
     enable_optimizer = False
-    providers = []
-    chains = {}
+    providers: list[object] = []
+    chains: dict[str, object] = {}
 
 
 def test_locked_prompt_appends_and_dedupes():

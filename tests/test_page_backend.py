@@ -28,7 +28,7 @@ REQUEST_BODY = contextvars.ContextVar("page_test_request_body", default=None)
 
 class PageRequest:
     content_length = None
-    args = {}
+    args: dict[str, str] = {}
 
     async def get_json(self, **kwargs):
         return copy.deepcopy(REQUEST_BODY.get())

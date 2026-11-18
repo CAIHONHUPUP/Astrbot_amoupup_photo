@@ -1,0 +1,685 @@
+{
+ "cache": {
+  "active_persona_id": "default",
+  "allowed_users": [],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_1"
+   ],
+   "text2img": [
+    "node_1"
+   ],
+   "video": [
+    "video_node_1"
+   ]
+  },
+  "checkin_bonus_max": 3,
+  "checkin_bonus_min": 1,
+  "daily_image_limit": 20,
+  "draw_error_message": "💥 绘制失败: {error}",
+  "draw_pending_message": "🎨 收到灵感，正在绘制...",
+  "enable_checkin": false,
+  "enable_daily_limit": false,
+  "enable_optimizer": true,
+  "enable_scheduled_cleanup": true,
+  "enable_size_limit_cleanup": true,
+  "item_negative": "穿模, 不对称, 背景杂乱",
+  "max_batch_count": 0,
+  "max_cache_size_mb": 500,
+  "negative_prompt_enabled": true,
+  "optimizer_custom_prompt": "",
+  "optimizer_model": "gpt-4o-mini",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 15.0,
+  "persona_base_prompt": "",
+  "persona_name": "默认助理",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "",
+    "id": "default",
+    "name": "默认助理",
+    "ref_images": []
+   }
+  ],
+  "presets": {},
+  "providers": [],
+  "room_negative": "拥挤, 杂乱无章, 地板悬空, 墙壁破损",
+  "scheduled_cleanup_interval_hours": 12,
+  "selfie_error_message": "💥 自拍生成失败: {error}",
+  "selfie_pending_message": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候...",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [],
+  "unlimited_users": [],
+  "usable_users": [],
+  "verbose_report": false,
+  "video_providers": []
+ },
+ "empty": {
+  "active_persona_id": "default",
+  "allowed_users": [],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_1"
+   ],
+   "text2img": [
+    "node_1"
+   ],
+   "video": [
+    "video_node_1"
+   ]
+  },
+  "checkin_bonus_max": 3,
+  "checkin_bonus_min": 1,
+  "daily_image_limit": 20,
+  "draw_error_message": "💥 绘制失败: {error}",
+  "draw_pending_message": "🎨 收到灵感，正在绘制...",
+  "enable_checkin": false,
+  "enable_daily_limit": false,
+  "enable_optimizer": true,
+  "enable_scheduled_cleanup": false,
+  "enable_size_limit_cleanup": false,
+  "item_negative": "穿模, 不对称, 背景杂乱",
+  "max_batch_count": 0,
+  "max_cache_size_mb": 512,
+  "negative_prompt_enabled": true,
+  "optimizer_custom_prompt": "",
+  "optimizer_model": "gpt-4o-mini",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 15.0,
+  "persona_base_prompt": "",
+  "persona_name": "默认助理",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "",
+    "id": "default",
+    "name": "默认助理",
+    "ref_images": []
+   }
+  ],
+  "presets": {},
+  "providers": [],
+  "room_negative": "拥挤, 杂乱无章, 地板悬空, 墙壁破损",
+  "scheduled_cleanup_interval_hours": 24,
+  "selfie_error_message": "💥 自拍生成失败: {error}",
+  "selfie_pending_message": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候...",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [],
+  "unlimited_users": [],
+  "usable_users": [],
+  "verbose_report": false,
+  "video_providers": []
+ },
+ "negative": {
+  "active_persona_id": "default",
+  "allowed_users": [],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_1"
+   ],
+   "text2img": [
+    "node_1"
+   ],
+   "video": [
+    "video_node_1"
+   ]
+  },
+  "checkin_bonus_max": 3,
+  "checkin_bonus_min": 1,
+  "daily_image_limit": 20,
+  "draw_error_message": "💥 绘制失败: {error}",
+  "draw_pending_message": "🎨 收到灵感，正在绘制...",
+  "enable_checkin": false,
+  "enable_daily_limit": false,
+  "enable_optimizer": true,
+  "enable_scheduled_cleanup": false,
+  "enable_size_limit_cleanup": false,
+  "item_negative": "i",
+  "max_batch_count": 0,
+  "max_cache_size_mb": 512,
+  "negative_prompt_enabled": false,
+  "optimizer_custom_prompt": "",
+  "optimizer_model": "gpt-4o-mini",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 15.0,
+  "persona_base_prompt": "",
+  "persona_name": "默认助理",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "",
+    "id": "default",
+    "name": "默认助理",
+    "ref_images": []
+   }
+  ],
+  "presets": {},
+  "providers": [],
+  "room_negative": "r",
+  "scheduled_cleanup_interval_hours": 24,
+  "selfie_error_message": "💥 自拍生成失败: {error}",
+  "selfie_pending_message": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候...",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [],
+  "unlimited_users": [],
+  "usable_users": [],
+  "verbose_report": false,
+  "video_providers": []
+ },
+ "permissions": {
+  "active_persona_id": "default",
+  "allowed_users": [
+   "a1",
+   "a2",
+   "a3"
+  ],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [
+   "b1",
+   "b2"
+  ],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_1"
+   ],
+   "text2img": [
+    "node_1"
+   ],
+   "video": [
+    "video_node_1"
+   ]
+  },
+  "checkin_bonus_max": 3,
+  "checkin_bonus_min": 1,
+  "daily_image_limit": 20,
+  "draw_error_message": "💥 绘制失败: {error}",
+  "draw_pending_message": "🎨 收到灵感，正在绘制...",
+  "enable_checkin": false,
+  "enable_daily_limit": false,
+  "enable_optimizer": true,
+  "enable_scheduled_cleanup": false,
+  "enable_size_limit_cleanup": false,
+  "item_negative": "穿模, 不对称, 背景杂乱",
+  "max_batch_count": 0,
+  "max_cache_size_mb": 512,
+  "negative_prompt_enabled": true,
+  "optimizer_custom_prompt": "",
+  "optimizer_model": "gpt-4o-mini",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 15.0,
+  "persona_base_prompt": "",
+  "persona_name": "默认助理",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "",
+    "id": "default",
+    "name": "默认助理",
+    "ref_images": []
+   }
+  ],
+  "presets": {},
+  "providers": [],
+  "room_negative": "拥挤, 杂乱无章, 地板悬空, 墙壁破损",
+  "scheduled_cleanup_interval_hours": 24,
+  "selfie_error_message": "💥 自拍生成失败: {error}",
+  "selfie_pending_message": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候...",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [
+   "g1",
+   "g2"
+  ],
+  "unlimited_users": [
+   "a1",
+   "a2",
+   "a3"
+  ],
+  "usable_users": [
+   "u1",
+   "u2",
+   "u3",
+   "u4"
+  ],
+  "verbose_report": false,
+  "video_providers": []
+ },
+ "persona_legacy": {
+  "active_persona_id": "default",
+  "allowed_users": [],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_1"
+   ],
+   "text2img": [
+    "node_1"
+   ],
+   "video": [
+    "video_node_1"
+   ]
+  },
+  "checkin_bonus_max": 3,
+  "checkin_bonus_min": 1,
+  "daily_image_limit": 20,
+  "draw_error_message": "💥 绘制失败: {error}",
+  "draw_pending_message": "🎨 收到灵感，正在绘制...",
+  "enable_checkin": false,
+  "enable_daily_limit": false,
+  "enable_optimizer": true,
+  "enable_scheduled_cleanup": false,
+  "enable_size_limit_cleanup": false,
+  "item_negative": "穿模, 不对称, 背景杂乱",
+  "max_batch_count": 0,
+  "max_cache_size_mb": 512,
+  "negative_prompt_enabled": true,
+  "optimizer_custom_prompt": "",
+  "optimizer_model": "gpt-4o-mini",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 15.0,
+  "persona_base_prompt": "base",
+  "persona_name": "阿鱼",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "base",
+    "id": "default",
+    "name": "阿鱼",
+    "ref_images": []
+   }
+  ],
+  "presets": {},
+  "providers": [],
+  "room_negative": "拥挤, 杂乱无章, 地板悬空, 墙壁破损",
+  "scheduled_cleanup_interval_hours": 24,
+  "selfie_error_message": "💥 自拍生成失败: {error}",
+  "selfie_pending_message": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候...",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [],
+  "unlimited_users": [],
+  "usable_users": [],
+  "verbose_report": false,
+  "video_providers": []
+ },
+ "presets_mixed": {
+  "active_persona_id": "default",
+  "allowed_users": [],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_1"
+   ],
+   "text2img": [
+    "node_1"
+   ],
+   "video": [
+    "video_node_1"
+   ]
+  },
+  "checkin_bonus_max": 3,
+  "checkin_bonus_min": 1,
+  "daily_image_limit": 20,
+  "draw_error_message": "💥 绘制失败: {error}",
+  "draw_pending_message": "🎨 收到灵感，正在绘制...",
+  "enable_checkin": false,
+  "enable_daily_limit": false,
+  "enable_optimizer": true,
+  "enable_scheduled_cleanup": false,
+  "enable_size_limit_cleanup": false,
+  "item_negative": "穿模, 不对称, 背景杂乱",
+  "max_batch_count": 0,
+  "max_cache_size_mb": 512,
+  "negative_prompt_enabled": true,
+  "optimizer_custom_prompt": "",
+  "optimizer_model": "gpt-4o-mini",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 15.0,
+  "persona_base_prompt": "",
+  "persona_name": "默认助理",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "",
+    "id": "default",
+    "name": "默认助理",
+    "ref_images": []
+   }
+  ],
+  "presets": {
+   "x": "y",
+   "名字": "提示词",
+   "胶片": "35mm"
+  },
+  "providers": [],
+  "room_negative": "拥挤, 杂乱无章, 地板悬空, 墙壁破损",
+  "scheduled_cleanup_interval_hours": 24,
+  "selfie_error_message": "💥 自拍生成失败: {error}",
+  "selfie_pending_message": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候...",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [],
+  "unlimited_users": [],
+  "usable_users": [],
+  "verbose_report": false,
+  "video_providers": []
+ },
+ "providers": {
+  "active_persona_id": "default",
+  "allowed_users": [],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_1"
+   ],
+   "text2img": [
+    "node_1"
+   ],
+   "video": [
+    "video_node_1"
+   ]
+  },
+  "checkin_bonus_max": 3,
+  "checkin_bonus_min": 1,
+  "daily_image_limit": 20,
+  "draw_error_message": "💥 绘制失败: {error}",
+  "draw_pending_message": "🎨 收到灵感，正在绘制...",
+  "enable_checkin": false,
+  "enable_daily_limit": false,
+  "enable_optimizer": true,
+  "enable_scheduled_cleanup": false,
+  "enable_size_limit_cleanup": false,
+  "item_negative": "穿模, 不对称, 背景杂乱",
+  "max_batch_count": 0,
+  "max_cache_size_mb": 512,
+  "negative_prompt_enabled": true,
+  "optimizer_custom_prompt": "",
+  "optimizer_model": "gpt-4o-mini",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 15.0,
+  "persona_base_prompt": "",
+  "persona_name": "默认助理",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "",
+    "id": "default",
+    "name": "默认助理",
+    "ref_images": []
+   }
+  ],
+  "presets": {},
+  "providers": [
+   {
+    "api_keys": [
+     "k1"
+    ],
+    "api_type": "openai_image",
+    "available_models": [
+     "m1"
+    ],
+    "base_url": "https://x.example/v1",
+    "default_size": "",
+    "id": "p1",
+    "model": "m1",
+    "timeout": 60.0
+   }
+  ],
+  "room_negative": "拥挤, 杂乱无章, 地板悬空, 墙壁破损",
+  "scheduled_cleanup_interval_hours": 24,
+  "selfie_error_message": "💥 自拍生成失败: {error}",
+  "selfie_pending_message": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候...",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [],
+  "unlimited_users": [],
+  "usable_users": [],
+  "verbose_report": false,
+  "video_providers": [
+   {
+    "api_keys": [
+     "k2"
+    ],
+    "api_type": "async_task",
+    "available_models": [
+     "vm1"
+    ],
+    "base_url": "https://v.example/v1",
+    "default_size": "",
+    "id": "v1",
+    "model": "vm1",
+    "timeout": 300.0
+   }
+  ]
+ },
+ "reply": {
+  "active_persona_id": "default",
+  "allowed_users": [],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_1"
+   ],
+   "text2img": [
+    "node_1"
+   ],
+   "video": [
+    "video_node_1"
+   ]
+  },
+  "checkin_bonus_max": 3,
+  "checkin_bonus_min": 1,
+  "daily_image_limit": 20,
+  "draw_error_message": "错了",
+  "draw_pending_message": "画着",
+  "enable_checkin": false,
+  "enable_daily_limit": false,
+  "enable_optimizer": true,
+  "enable_scheduled_cleanup": false,
+  "enable_size_limit_cleanup": false,
+  "item_negative": "穿模, 不对称, 背景杂乱",
+  "max_batch_count": 0,
+  "max_cache_size_mb": 512,
+  "negative_prompt_enabled": true,
+  "optimizer_custom_prompt": "",
+  "optimizer_model": "gpt-4o-mini",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 15.0,
+  "persona_base_prompt": "",
+  "persona_name": "默认助理",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "",
+    "id": "default",
+    "name": "默认助理",
+    "ref_images": []
+   }
+  ],
+  "presets": {},
+  "providers": [],
+  "room_negative": "拥挤, 杂乱无章, 地板悬空, 墙壁破损",
+  "scheduled_cleanup_interval_hours": 24,
+  "selfie_error_message": "拍错",
+  "selfie_pending_message": "拍着",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [],
+  "unlimited_users": [],
+  "usable_users": [],
+  "verbose_report": false,
+  "video_providers": []
+ },
+ "router_optimizer": {
+  "active_persona_id": "default",
+  "allowed_users": [],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_8"
+   ],
+   "text2img": [
+    "node_9"
+   ],
+   "video": [
+    "video_node_2"
+   ]
+  },
+  "checkin_bonus_max": 3,
+  "checkin_bonus_min": 1,
+  "daily_image_limit": 20,
+  "draw_error_message": "💥 绘制失败: {error}",
+  "draw_pending_message": "🎨 收到灵感，正在绘制...",
+  "enable_checkin": false,
+  "enable_daily_limit": false,
+  "enable_optimizer": false,
+  "enable_scheduled_cleanup": false,
+  "enable_size_limit_cleanup": false,
+  "item_negative": "穿模, 不对称, 背景杂乱",
+  "max_batch_count": 10,
+  "max_cache_size_mb": 512,
+  "negative_prompt_enabled": true,
+  "optimizer_custom_prompt": "cp",
+  "optimizer_model": "m",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 30.0,
+  "persona_base_prompt": "",
+  "persona_name": "默认助理",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "",
+    "id": "default",
+    "name": "默认助理",
+    "ref_images": []
+   }
+  ],
+  "presets": {},
+  "providers": [],
+  "room_negative": "拥挤, 杂乱无章, 地板悬空, 墙壁破损",
+  "scheduled_cleanup_interval_hours": 24,
+  "selfie_error_message": "💥 自拍生成失败: {error}",
+  "selfie_pending_message": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候...",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [],
+  "unlimited_users": [],
+  "usable_users": [],
+  "verbose_report": false,
+  "video_providers": []
+ },
+ "usage": {
+  "active_persona_id": "default",
+  "allowed_users": [],
+  "base_negative": "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质",
+  "blocked_users": [],
+  "chains": {
+   "optimizer": [
+    "node_1"
+   ],
+   "selfie": [
+    "node_1"
+   ],
+   "text2img": [
+    "node_1"
+   ],
+   "video": [
+    "video_node_1"
+   ]
+  },
+  "checkin_bonus_max": 5,
+  "checkin_bonus_min": 5,
+  "daily_image_limit": 5,
+  "draw_error_message": "💥 绘制失败: {error}",
+  "draw_pending_message": "🎨 收到灵感，正在绘制...",
+  "enable_checkin": true,
+  "enable_daily_limit": true,
+  "enable_optimizer": true,
+  "enable_scheduled_cleanup": false,
+  "enable_size_limit_cleanup": false,
+  "item_negative": "穿模, 不对称, 背景杂乱",
+  "max_batch_count": 0,
+  "max_cache_size_mb": 512,
+  "negative_prompt_enabled": true,
+  "optimizer_custom_prompt": "",
+  "optimizer_model": "gpt-4o-mini",
+  "optimizer_style": "手机日常原生感",
+  "optimizer_timeout": 15.0,
+  "persona_base_prompt": "",
+  "persona_name": "默认助理",
+  "persona_ref_image": "",
+  "persona_ref_images": [],
+  "personas": [
+   {
+    "base_prompt": "",
+    "id": "default",
+    "name": "默认助理",
+    "ref_images": []
+   }
+  ],
+  "presets": {},
+  "providers": [],
+  "room_negative": "拥挤, 杂乱无章, 地板悬空, 墙壁破损",
+  "scheduled_cleanup_interval_hours": 24,
+  "selfie_error_message": "💥 自拍生成失败: {error}",
+  "selfie_pending_message": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候...",
+  "show_generation_time": false,
+  "show_request_model": false,
+  "unlimited_groups": [],
+  "unlimited_users": [],
+  "usable_users": [],
+  "verbose_report": false,
+  "video_providers": []
+ }
+}

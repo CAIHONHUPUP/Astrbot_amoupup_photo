@@ -1,4 +1,4 @@
-"""万象画卷插件任务层 mixin。"""
+"""「我能永远定格你」任务层 mixin。"""
 
 import asyncio
 import base64
@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import replace
 from urllib.parse import urljoin, urlparse
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
 import aiohttp
 
 try:
@@ -24,7 +24,7 @@ except ImportError:
     from astrbot.api.event import AstrMessageEvent
     from astrbot.api.event.components import Image, Plain, At
     from astrbot.api.utils import logger
-try:
+if TYPE_CHECKING:
     from .constants import (
         MAX_ACTIVE_BACKGROUND_TASKS,
         MAX_BACKGROUND_TASKS,
@@ -40,26 +40,72 @@ try:
         sniff_image_content_type,
         split_data_url,
     )
-except ImportError:
-    from constants import (
-        MAX_ACTIVE_BACKGROUND_TASKS,
-        MAX_BACKGROUND_TASKS,
-        MAX_IMAGE_BYTES,
-        MAX_REFERENCE_IMAGES_PER_REQUEST,
-        MAX_REMOTE_REDIRECTS,
-        PLUGIN_RESULT_ERROR_MAX_LENGTH,
-    )
-    from core.chain_manager import ChainRunResult
-    from utils import (
-        guess_image_content_type,
-        save_image_bytes,
-        sniff_image_content_type,
-        split_data_url,
-    )
+else:
+    try:
+        from .constants import (
+            MAX_ACTIVE_BACKGROUND_TASKS,
+            MAX_BACKGROUND_TASKS,
+            MAX_IMAGE_BYTES,
+            MAX_REFERENCE_IMAGES_PER_REQUEST,
+            MAX_REMOTE_REDIRECTS,
+            PLUGIN_RESULT_ERROR_MAX_LENGTH,
+        )
+        from .core.chain_manager import ChainRunResult
+        from .utils import (
+            guess_image_content_type,
+            save_image_bytes,
+            sniff_image_content_type,
+            split_data_url,
+        )
+    except ImportError:
+        from constants import (
+            MAX_ACTIVE_BACKGROUND_TASKS,
+            MAX_BACKGROUND_TASKS,
+            MAX_IMAGE_BYTES,
+            MAX_REFERENCE_IMAGES_PER_REQUEST,
+            MAX_REMOTE_REDIRECTS,
+            PLUGIN_RESULT_ERROR_MAX_LENGTH,
+        )
+        from core.chain_manager import ChainRunResult
+        from utils import (
+            guess_image_content_type,
+            save_image_bytes,
+            sniff_image_content_type,
+            split_data_url,
+        )
+
+
+if TYPE_CHECKING:
+    from .models import PluginConfig
 
 
 class OmniDrawTaskMixin:
     """任务层：后台任务、生图/自拍/GIF 任务与素材处理。"""
+
+    data_dir: str
+    plugin_config: "PluginConfig"
+    _background_tasks: Set[asyncio.Task]
+    _background_task_kinds: Dict[asyncio.Task, str]
+    _background_semaphore: Optional[asyncio.Semaphore]
+    _background_semaphore_loop: Optional[asyncio.AbstractEventLoop]
+    _lease_cache_paths: Callable[..., List[str]]
+    _release_cache_paths: Callable[..., None]
+    _prune_cache_if_needed: Callable[..., Dict[str, Any]]
+    _send_gif_result: Callable[..., Any]
+    _schedule_cache_prune: Callable[..., None]
+    _extract_at_user_id: Callable[..., Any]
+    _build_qq_avatar_url: Callable[..., Any]
+    _message_component_has_command: Callable[..., bool]
+    _refresh_from_native_config_if_changed: Callable[..., None]
+    _normalize_count: Callable[..., int]
+    _permission_denied_message: Callable[..., str]
+    _reserve_image_quota: Callable[..., Any]
+    _image_quota_error_message: Callable[..., str]
+    _run_selfie_generation: Callable[..., Any]
+    _run_text2img_generation: Callable[..., Any]
+    _release_image_quota: Callable[..., None]
+    _finalize_image_quota: Callable[..., None]
+    _record_generated_images: Callable[..., Any]
 
     def _create_background_task(
         self,
@@ -92,13 +138,16 @@ class OmniDrawTaskMixin:
                     close()
             self._release_cache_paths(leases)
 
+        semaphore = self._background_semaphore
+        assert semaphore is not None
+
         async def run_limited() -> None:
             try:
                 if kind == "scheduler":
                     lifecycle["coroutine_started"] = True
                     await coro
                     return
-                async with self._background_semaphore:
+                async with semaphore:
                     lifecycle["coroutine_started"] = True
                     await coro
             finally:
@@ -120,7 +169,7 @@ class OmniDrawTaskMixin:
                 return
             if exc:
                 logger.error(
-                    f"[OmniDraw] 后台任务异常退出: {exc}",
+                    f"[我能永远定格你] 后台任务异常退出: {exc}",
                     exc_info=(type(exc), exc, exc.__traceback__),
                 )
 
@@ -139,7 +188,7 @@ class OmniDrawTaskMixin:
         self._background_semaphore = None
         self._background_semaphore_loop = None
         self._cache_cleanup_task = None
-        logger.info("[OmniDraw] 已取消所有后台视频任务。")
+        logger.info("[我能永远定格你] 已取消所有后台视频任务。")
 
     async def _materialize_gif_result(
         self, result: Any, session: Optional[aiohttp.ClientSession] = None,
@@ -215,7 +264,7 @@ class OmniDrawTaskMixin:
         gif_requested: bool = False,
     ) -> Optional[Any]:
         if gif_requested or self._is_gif_result(result):
-            leased_paths = []
+            leased_paths: List[str] = []
             try:
                 result = await self._materialize_gif_result(result, leased_paths=leased_paths)
                 self._prune_cache_if_needed("temp_images", protected_paths=leased_paths)
@@ -281,7 +330,7 @@ class OmniDrawTaskMixin:
 
     def _format_generation_elapsed(self, elapsed_seconds: Optional[float]) -> str:
         try:
-            seconds = max(0.0, float(elapsed_seconds))
+            seconds = max(0.0, float(elapsed_seconds or 0.0))
         except (TypeError, ValueError):
             seconds = 0.0
         return f"{seconds:.1f}s"
@@ -367,8 +416,14 @@ class OmniDrawTaskMixin:
         if quote_obj:
             _search(quote_obj)
 
-        seen = set()
-        return [item for item in images if not (item in seen or seen.add(item))]
+        seen: set[Any] = set()
+        unique_images: List[str] = []
+        for item in images:
+            if item in seen:
+                continue
+            seen.add(item)
+            unique_images.append(item)
+        return unique_images
 
     async def _read_response_limited(self, response: aiohttp.ClientResponse, limit: int = MAX_IMAGE_BYTES) -> bytes:
         chunks = []
@@ -477,7 +532,7 @@ class OmniDrawTaskMixin:
             async with session.get(
                 current_url,
                 headers=headers,
-                timeout=15,
+                timeout=aiohttp.ClientTimeout(total=15),
                 allow_redirects=False,
             ) as response:
                 if 300 <= response.status < 400:
@@ -500,7 +555,7 @@ class OmniDrawTaskMixin:
         session: Optional[aiohttp.ClientSession] = None,
         allow_local_refs: bool = False,
     ) -> List[str]:
-        processed_paths = []
+        processed_paths: List[str] = []
         if not raw_images:
             return processed_paths
 
@@ -542,7 +597,7 @@ class OmniDrawTaskMixin:
                         )
                         processed_paths.append(file_path)
                     except (IndexError, ValueError, binascii.Error, OSError) as exc:
-                        logger.warning(f"[OmniDraw] Base64 参考图处理失败: {exc}")
+                        logger.warning(f"[我能永远定格你] Base64 参考图处理失败: {exc}")
                     continue
 
                 if not lowered_ref.startswith(("http://", "https://")):
@@ -556,7 +611,7 @@ class OmniDrawTaskMixin:
                             )
                         )
                     except (OSError, ValueError) as exc:
-                        logger.warning(f"[OmniDraw] 本地参考图处理失败: {exc}")
+                        logger.warning(f"[我能永远定格你] 本地参考图处理失败: {exc}")
                     continue
 
                 if session_obj is None:
@@ -585,13 +640,13 @@ class OmniDrawTaskMixin:
                         if attempt == 3:
                             parsed = urlparse(img_ref)
                             safe_source = f"{parsed.scheme}://{parsed.hostname or ''}{parsed.path}"
-                            logger.warning(f"[OmniDraw] 参考图下载失败: {safe_source} ({exc})")
+                            logger.warning(f"[我能永远定格你] 参考图下载失败: {safe_source} ({exc})")
                         else:
                             await asyncio.sleep(1)
 
             await asyncio.to_thread(lambda: self._prune_cache_if_needed("user_refs", protected_paths=processed_paths))
         finally:
-            if session_owner:
+            if session_owner and session_obj is not None:
                 await session_obj.close()
         return processed_paths
 
@@ -613,6 +668,8 @@ class OmniDrawTaskMixin:
         scene_lock: str = "",
         pose_lock: str = "",
         negative_prompt: str = "",
+        skip_outfit_lock: bool = False,
+        pose_ref: Any = None,
     ) -> Dict[str, Any]:
         """Generate image(s) for another plugin and return serializable image data.
 
@@ -657,6 +714,8 @@ class OmniDrawTaskMixin:
                     pose_lock=pose_lock,
                     negative_prompt=negative_prompt,
                     allow_local_refs=allow_local_refs,
+                    skip_outfit_lock=skip_outfit_lock,
+                    pose_ref=pose_ref,
                 )
             else:
                 generation = await self._run_text2img_generation(
@@ -755,6 +814,7 @@ class OmniDrawTaskMixin:
         return prompt_list[:target_count]
 
     def _as_plugin_image_refs(self, refs: Any) -> List[str]:
+        refs_iterable: Iterable[Any]
         if refs is None:
             return []
         if isinstance(refs, str):
@@ -764,7 +824,7 @@ class OmniDrawTaskMixin:
             if refs_text.startswith(("[", "{")):
                 try:
                     return self._as_plugin_image_refs(json.loads(refs_text))
-                except Exception:
+                except Exception:  # silent: refs 不是 JSON 时按字符串/换行继续解析
                     pass
             if refs_text.startswith("data:image"):
                 return [refs_text]
@@ -788,8 +848,14 @@ class OmniDrawTaskMixin:
             ref_text = str(ref or "").strip()
             if ref_text:
                 normalized.append(ref_text)
-        seen = set()
-        return [ref for ref in normalized if not (ref in seen or seen.add(ref))]
+        seen: set[str] = set()
+        unique_refs: List[str] = []
+        for ref in normalized:
+            if ref in seen:
+                continue
+            seen.add(ref)
+            unique_refs.append(ref)
+        return unique_refs
 
     def _validated_plugin_image_refs(self, refs: Any, allow_local_refs: bool = False) -> List[str]:
         normalized = self._as_plugin_image_refs(refs)
@@ -872,7 +938,7 @@ class OmniDrawTaskMixin:
                 file_path = save_image_bytes(image_bytes, save_dir, image_url, "plugin", index, content_type)
                 self._schedule_cache_prune("temp_images", [file_path])
             except Exception as exc:
-                logger.warning(f"[OmniDraw] 插件生图结果落盘失败: {exc}")
+                logger.warning(f"[我能永远定格你] 插件生图结果落盘失败: {exc}")
         elif image_url.startswith("http"):
             source_type = "url"
             url = image_url
@@ -924,8 +990,5 @@ class OmniDrawTaskMixin:
         return text[:200]
 
     def _negative_prompt_for(self, prompt: str, scene_type: str = "") -> str:
-        try:
-            from .core.negative_prompt import get_negative_prompt
-        except ImportError:
-            from core.negative_prompt import get_negative_prompt
+        from .core.negative_prompt import get_negative_prompt
         return get_negative_prompt(self.plugin_config, scene_type, prompt)

@@ -426,14 +426,14 @@ def run_browser(channel, output):
             navigate(stats, "tab-usage")
             assert stats.evaluate("window.testGets") == ["get_page_config", "get_usage_stats", "get_cache_stats"]
 
-            old_token = "/astrbot_plugin_omnidraw/get_image?token=" + "a" * 64
-            new_token = "/astrbot_plugin_omnidraw/get_image?token=" + "b" * 64
+            old_token = "/Astrbot_amoupup_photo/get_image?token=" + "a" * 64
+            new_token = "/Astrbot_amoupup_photo/get_image?token=" + "b" * 64
             image_source = fixture_config()
             image_source["persona_config"]["profiles"][0]["persona_ref_image"] = [old_token]
             images = browser.new_page()
             images.on("pageerror", lambda error: errors.append(str(error)))
             unauthorized_requests = []
-            images.route("**/astrbot_plugin_omnidraw/get_image?**", lambda route: (
+            images.route("**/Astrbot_amoupup_photo/get_image?**", lambda route: (
                 unauthorized_requests.append(route.request.url), route.fulfill(status=401, body="Forbidden")
             ))
             images.add_init_script(BRIDGE_SCRIPT.replace("CONFIG", json.dumps(image_source)) + """

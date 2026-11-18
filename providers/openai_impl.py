@@ -17,7 +17,7 @@ if not getattr(socket, "_amo_image_pinned", False):
         return _amo_orig_getaddrinfo(host, port, *args, **kwargs)
 
     socket.getaddrinfo = _amo_getaddrinfo
-    socket._amo_image_pinned = True
+    setattr(socket, "_amo_image_pinned", True)
 
 from astrbot.api import logger
 from ..constants import MAX_IMAGE_BYTES

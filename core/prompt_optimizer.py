@@ -25,6 +25,33 @@ except ImportError:
 
 MAX_OPTIMIZER_RESPONSE_BYTES = 256 * 1024
 
+#: action 点名这些服装词 = 用户自己定了穿搭，OUTFIT LOCK 必须让位（B2c）。
+#: 只收「衣服本身」；围巾/帽子/项链等配饰不算——只提配饰时仍锁今日穿搭。
+OUTFIT_WORDS_ZH = (
+    "卫衣", "t恤", "衬衫", "衬衣", "毛衣", "针织衫", "外套", "大衣", "风衣", "夹克",
+    "西装", "裙", "裤", "鞋", "靴", "泳衣", "泳装", "泳裤", "睡衣", "睡裙",
+    "吊带", "背心", "马甲", "短袖", "长袖", "校服", "球衣", "内衣",
+)
+# 不能用 \b：中文是 Unicode 单词字符，"hoodie在窗边" 里 e 和 在 之间没有 \b。
+_OUTFIT_PATTERN_EN = re.compile(
+    r"(?<![a-z])(?:t-?shirt|tee|shirt|blouse|hoodie|sweatshirt|sweater|jumper|"
+    r"cardigan|jacket|coat|trench|skirt|dress|gown|pants|trousers|jeans|shorts|"
+    r"overalls|swimsuit|bikini|swimwear|pajamas|pyjamas|uniform|vest|tank\s*top|"
+    r"socks|stockings|shoes|sneakers|boots|sandals|heels|underwear|lingerie)"
+    r"(?![a-z])",
+    re.I,
+)
+
+
+def action_names_outfit(action: str) -> bool:
+    """action 是否明确点名了衣服/整套穿搭（中文、英文、中英混写都算）。"""
+    text = str(action or "").strip().lower()
+    if not text:
+        return False
+    if any(word in text for word in OUTFIT_WORDS_ZH):
+        return True
+    return bool(_OUTFIT_PATTERN_EN.search(text))
+
 
 def apply_scene_pose_lock(items, scene_lock: str = "", pose_lock: str = ""):
     """[amo patch] 场景/姿势锁：解析出 JSON 后直接用给定的英文句子覆盖，副脑改不回去。
@@ -90,7 +117,7 @@ _STYLE_MEDIUM_RE = re.compile(
 
 #: 风格锁文案：预设名 → 覆盖句（用于把某个预设的成片口味固定下来）
 STYLE_LOCK_TEXTS = {
-    "日系插画大师": "refined semi-realistic anime illustration, realistic skin texture with subtle pores, natural window light with soft realistic shadows, muted natural color grading, photographic lighting, accurate anatomy and proportions, high detail",
+    "日系插画大师": "polished 2D anime illustration, clean lineart, refined cel shading, flat colors, flat cel skin shading, simplified cel shadows, anime proportions, soft anime lighting, pure 2D rendering",
 }
 
 
@@ -123,6 +150,10 @@ def apply_style_lock(items, style_data, style_choice=""):
                 if preset_camera and preset_camera != lock_camera:
                     cleaned = cleaned.replace(preset_camera, "")
                     for segment in preset_style_segments:
+                        # 锁句本身会重复预设的 cel/shading 词；跳过锁句内的段落，
+                        # 否则第二遍 apply_style_lock 会把锁句拆掉再补一遍（不幂等）。
+                        if segment.lower() in lock_key:
+                            continue
                         if segment.lower() in cleaned.lower():
                             cleaned = re.sub(re.escape(segment), "", cleaned, flags=re.IGNORECASE)
                 cleaned = _STYLE_WS_RE.sub(" ", cleaned)
@@ -179,7 +210,8 @@ class PromptOptimizer:
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
         style_data, _ref_rule, _scene_lock, _pose_lock = self._apply_reference_rules(
-            style_data, has_reference, selfie, external_camera, locked_outfit, scene_lock, pose_lock
+            style_data, has_reference, selfie, external_camera, locked_outfit, scene_lock, pose_lock,
+            raw_action=raw_action,
         )
         sys_prompt = self._build_system_prompt(style_data, _ref_rule, count, _quality_guardrails)
 
@@ -202,7 +234,7 @@ class PromptOptimizer:
                 timeout_val = self.config.optimizer_timeout * (1.5 if count > 1 else 1.0)
                 logger.info(f"🧠 [副脑] 正在以【{style_choice}】风格重构提示词 (模型: {self.config.optimizer_model})")
 
-                async with session_obj.post(endpoint, headers=headers, json=payload, timeout=timeout_val) as resp:
+                async with session_obj.post(endpoint, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=timeout_val)) as resp:
                     resp.raise_for_status()
                     response_text = await read_response_text_limited(
                         resp,
@@ -328,8 +360,12 @@ class PromptOptimizer:
             style_data = STYLE_PRESETS.get(style_choice, STYLE_PRESETS["手机日常原生感"])
         return style_data, universal_quality_guardrails
 
-    def _apply_reference_rules(self, style_data: dict, has_reference: bool, selfie: bool, external_camera: bool, locked_outfit: str, scene_lock: str, pose_lock: str):
+    def _apply_reference_rules(self, style_data: dict, has_reference: bool, selfie: bool, external_camera: bool, locked_outfit: str, scene_lock: str, pose_lock: str, raw_action: str = ""):
         """叠加参考图、自拍/他拍、今日穿搭与场景/姿势锁规则。"""
+        # B2c：action 自己点名了衣服，OUTFIT LOCK 必须让位；只锁没点名的默认场景。
+        if locked_outfit and action_names_outfit(raw_action):
+            logger.info("🔓 [副脑] action 点名了衣服，本次跳过 OUTFIT LOCK")
+            locked_outfit = ""
         # [patched] 有参考图时锁定人物外观，禁止副脑另编长相
         _ref_rule = ""
         if has_reference:

@@ -1,5 +1,5 @@
 """
-AstrBot 万象画卷插件 v3.1 - OpenAI Chat 兼容实现
+AstrBot「我能永远定格你」v3.1 - OpenAI Chat 兼容实现
 功能：支持高阶多模态参数动态透传 (兼容 Midjourney/Gemini 等走 Chat 通道的代理节点)
 """
 import aiohttp
@@ -31,10 +31,7 @@ class OpenAIChatProvider(BaseProvider):
 
     async def generate_image(self, prompt: str, **kwargs: Any) -> str:
         negative = str(kwargs.pop("negative_prompt", "") or "").strip()
-        try:
-            from ..core.negative_prompt import merge_negative
-        except ImportError:
-            from core.negative_prompt import merge_negative
+        from ..core.negative_prompt import merge_negative
         prompt = merge_negative(prompt, negative)
         current_key = self.get_current_key()
         if not current_key:

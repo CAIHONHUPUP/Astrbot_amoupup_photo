@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 """命令 /自拍 与 amo 自拍链路必须有同一套 optimize 参数（2026-11-16）。"""
-import asyncio
 import json
 import pathlib
 import tempfile
 import time
 import types
 import unittest
-from unittest.mock import patch
 
 import test_custom_endpoint as fixtures
 

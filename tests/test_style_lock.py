@@ -34,6 +34,7 @@ _stub("quart")
 
 _mod = importlib.import_module(PLUGIN_DIR.name + ".core.prompt_optimizer")
 apply_style_lock = _mod.apply_style_lock
+LOCK = _mod.STYLE_LOCK_TEXTS["日系插画大师"]
 
 
 def test_style_lock_appends_preset_and_strips_conflicts():
@@ -59,9 +60,9 @@ def test_style_lock_noop_without_camera():
     assert apply_style_lock(None, {"camera": "x"}) is None
 
 def test_locked_prompt_includes_style_lock():
-    out = _mod.locked_prompt("她坐在沙发上笑", "楼下的布艺沙发", "", "semi-realistic anime illustration")
+    out = _mod.locked_prompt("她坐在沙发上笑", "楼下的布艺沙发", "", LOCK)
     assert "楼下的布艺沙发" in out[0]
-    assert "semi-realistic anime illustration" in out[0]
+    assert LOCK in out[0]
 
 def test_style_lock_is_not_duplicated_on_second_pass():
     style = {"camera": "polished 2D illustration, clean linework"}
@@ -71,13 +72,12 @@ def test_style_lock_is_not_duplicated_on_second_pass():
     apply_style_lock(items, style, "日系插画大师")
     second = items[0]["technical_specs"]
     assert second == first
-    assert second.lower().count("semi-realistic anime illustration") == 1
+    assert second.lower().count(LOCK.lower()) == 1
 
 
 def test_locked_prompt_does_not_repeat_lock_text():
-    out = _mod.locked_prompt("she smiles, semi-realistic anime illustration",
-                             "", "", "semi-realistic anime illustration")
-    assert out[0].lower().count("semi-realistic anime illustration") == 1
+    out = _mod.locked_prompt("she smiles, " + LOCK, "", "", LOCK)
+    assert out[0].lower().count(LOCK.lower()) == 1
 
 
 
@@ -88,15 +88,36 @@ def test_optimizer_disabled_still_carries_style_lock():
     cfg = SimpleNamespace(enable_optimizer=False, optimizer_style="日系插画大师",
                           optimizer_custom_prompt="")
     out = asyncio.run(_mod.PromptOptimizer(cfg).optimize("她坐在沙发上笑"))
-    assert "semi-realistic anime illustration" in out[0]
+    assert LOCK in out[0]
 
 
-def test_style_lock_uses_realistic_override_for_anime_preset():
+def test_style_lock_overrides_conflicting_illustration_phrase():
     style = {"camera": "polished 2D illustration, clean linework, refined cel shading"}
     items = [{"technical_specs": "not an illustration, front-facing selfie"}]
     out = apply_style_lock(items, style, "日系插画大师")
     tech = out[0]["technical_specs"]
-    assert "semi-realistic anime illustration" in tech
+    assert LOCK in tech
     assert "not an illustration" not in tech
     assert "polished 2D illustration" not in tech
+
+
+def test_style_lock_text_is_pure_flat_2d():
+    """风格锁必须是扁平 2D，不能把半写实/摄影感重新带回来。"""
+    lock = LOCK.lower()
+    assert "2d" in lock
+    assert "cel" in lock
+    assert "lineart" in lock
+    for banned in ("semi-realistic", "photorealistic", "photographic", "realistic skin"):
+        assert banned not in lock
+
+
+def test_anime_preset_camera_and_lighting_are_pure_2d():
+    style_data, _ = _mod.PromptOptimizer(types.SimpleNamespace())._build_style_data("日系插画大师", "")
+    camera = style_data["camera"].lower()
+    lighting = style_data["lighting"].lower()
+    assert "2d" in camera and "cel shading" in camera
+    assert "anime lighting" in lighting
+    for banned in ("photorealistic", "photographic", "realistic skin", "semi-realistic"):
+        assert banned not in camera
+        assert banned not in lighting
 

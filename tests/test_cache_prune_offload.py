@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """机会性缓存清理不能阻塞事件循环（2026-11-16）。"""
-import asyncio
 import base64
 import pathlib
 import tempfile

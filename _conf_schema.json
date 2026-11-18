@@ -46,7 +46,7 @@
       "blocked_users": {
         "description": "用户黑名单（禁止使用）",
         "type": "text",
-        "hint": "黑名单内用户不能调用万象画卷指令和 LLM 工具，优先级高于白名单。",
+        "hint": "黑名单内用户不能调用「我能永远定格你」指令和 LLM 工具，优先级高于白名单。",
         "default": ""
       },
       "unlimited_groups": {

@@ -1,5 +1,5 @@
 """
-AstrBot 万象画卷插件 v3.0 - 单一人设 Prompt 构造服务
+AstrBot「我能永远定格你」v3.0 - 单一人设 Prompt 构造服务
 """
 import os
 from typing import Tuple, Dict, Any

@@ -16,7 +16,7 @@ if str(PLUGIN_DIR.parent) not in sys.path:
 
 # 本文件可以单独跑：不能依赖别的测试文件先 stub 掉 astrbot/quart；
 # 自己加的 stub 导入完就撤掉，别把其他测试文件的 stub 环境弄脏。
-_added_stubs = []
+_added_stubs: list[str] = []
 
 
 def _stub(name, **attrs):
@@ -173,7 +173,7 @@ def test_anime_lock_drops_shortened_preset_style_phrases():
     }]
     out = apply_style_lock(items, style_data, ANIME_STYLE)
     tech = out[0]["technical_specs"]
-    assert "semi-realistic anime illustration" in tech
+    assert _mod.STYLE_LOCK_TEXTS[ANIME_STYLE] in tech
     assert "2D illustration" not in tech
     assert "linework" not in tech
     assert "high resolution" in tech
@@ -218,4 +218,4 @@ def test_anime_lock_is_still_idempotent_with_segment_cleanup():
     first = items[0]["technical_specs"]
     apply_style_lock(items, style_data, ANIME_STYLE)
     assert items[0]["technical_specs"] == first
-    assert first.lower().count("semi-realistic anime illustration") == 1
+    assert first.lower().count(_mod.STYLE_LOCK_TEXTS[ANIME_STYLE].lower()) == 1

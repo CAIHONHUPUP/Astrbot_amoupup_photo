@@ -1,40 +1,26 @@
 """
-AstrBot 万象画卷插件。
+AstrBot「我能永远定格你」生图插件。
 
 负责命令入口、LLM 工具、配置页面 API、图片缓存与后台视频任务生命周期。
 """
 import asyncio
-import base64
-import binascii
 import copy
-import hashlib
-import ipaddress
-import json
-import mimetypes
 import os
-import random
-import re
-import socket
+import socket  # noqa: F401  test_gif_workflow 用 patch.object(main.socket, ...)
 import threading
 import time
 import uuid
-from dataclasses import replace
-from urllib.parse import parse_qs, urljoin, urlparse
-from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import aiohttp
-from quart import jsonify, request, send_file
 
 try:
     from astrbot.api.star import Context, Star, register
     from astrbot.api.event import AstrMessageEvent, filter
-    from astrbot.api.message_components import Image, Plain, At
-    from astrbot.api import llm_tool, logger
+    from astrbot.api import logger
 except ImportError:
     from astrbot.api.star import Context, Star, register
     from astrbot.api.event import AstrMessageEvent, filter
-    from astrbot.api.event.components import Image, Plain, At
-    from astrbot.api import llm_tool
     from astrbot.api.utils import logger
 
 try:
@@ -48,38 +34,24 @@ except Exception:
     def get_astrbot_data_path() -> str:
         return os.path.join(os.getcwd(), "data")
 
-from .constants import (
-    DEFAULT_BATCH_LIMIT,
-    DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
-    DEFAULT_DRAW_ERROR_MESSAGE,
+from .constants import (  # noqa: F401  MAX_* 由 tests 通过 main 模块读取
     DEFAULT_DRAW_PENDING_MESSAGE,
-    DEFAULT_MAX_CACHE_SIZE_MB,
-    DEFAULT_SELFIE_ERROR_MESSAGE,
     DEFAULT_SELFIE_PENDING_MESSAGE,
     LEGACY_PROVIDER_API_KEY_KEYS,
     MAX_ACTIVE_BACKGROUND_TASKS,
     MAX_BACKGROUND_TASKS,
-    MAX_IMAGE_BYTES,
     MAX_REFERENCE_IMAGES_PER_REQUEST,
     MessageEmoji,
     PRESET_VIEW_COMMANDS,
     RESERVED_PRESET_NAMES,
 )
-from .core.chain_manager import ChainManager, ChainRunResult
-from .core.image_options import is_gif_request, normalize_gif_options
+from .core.chain_manager import ChainManager
+from .core.image_options import is_gif_request
 from .core.negative_prompt import DEFAULT_BASE
 from .core.parser import CommandParser
-from .core.persona_manager import PersonaManager
-from .core.prompt_optimizer import PromptOptimizer
-from .core.video_manager import VideoManager
-from .models import PLUGIN_AUTHOR, PLUGIN_NAME, PLUGIN_VERSION, PluginConfig, _cleanup_unused_persona_refs
-from .utils import (
-    guess_image_content_type,
-    handle_errors,
-    save_image_bytes,
-    sniff_image_content_type,
-    split_data_url,
-)
+from .core.prompt_optimizer import action_names_outfit
+from .models import PLUGIN_AUTHOR, PLUGIN_NAME, PLUGIN_VERSION
+from .utils import handle_errors
 
 try:
     from astrbot.api.message_components import File
@@ -136,7 +108,15 @@ _EXTERNAL_CAMERA_HINTS = (
 )
 
 
-@register(PLUGIN_NAME, PLUGIN_AUTHOR, f"万象画卷 v{PLUGIN_VERSION}", PLUGIN_VERSION)
+def _ref_key(ref):
+    """参考图去重键：本地路径按 normcase+abspath 归一，URL/data URL 原样。"""
+    text = str(ref or "").strip()
+    if not text or text.startswith(("http://", "https://", "data:image")):
+        return text
+    return os.path.normcase(os.path.abspath(text))
+
+
+@register(PLUGIN_NAME, PLUGIN_AUTHOR, f"我能永远定格你 v{PLUGIN_VERSION}", PLUGIN_VERSION)
 class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixin, OmniDrawCacheMixin, Star):
     def __init__(self, context: Context, config: Optional[dict] = None):
         super().__init__(context)
@@ -147,10 +127,10 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
         self.usage_stats_path = os.path.join(self.data_dir, "omnidraw_usage_stats.json")
         self._usage_stats = self._load_usage_stats()
         self._quota_reservations: Dict[str, int] = {}
-        self._background_tasks = set()
+        self._background_tasks: set[asyncio.Task] = set()
         self._background_task_kinds: Dict[asyncio.Task, str] = {}
         self._background_semaphore: Optional[asyncio.Semaphore] = None
-        self._background_semaphore_loop = None
+        self._background_semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
         self._config_lock = threading.RLock()
         self._usage_lock = threading.RLock()
         self._cache_lease_lock = threading.RLock()
@@ -180,43 +160,43 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
             f"/{PLUGIN_NAME}/get_config",
             self.get_config_handler,
             ["GET"],
-            "获取万象画卷配置",
+            "获取我能永远定格你配置",
         )
         self.context.register_web_api(
             f"/{PLUGIN_NAME}/get_page_config",
             self.get_page_config_handler,
             ["GET"],
-            "获取万象画卷轻量页面配置",
+            "获取我能永远定格你轻量页面配置",
         )
         self.context.register_web_api(
             f"/{PLUGIN_NAME}/save_config",
             self.save_config_handler,
             ["POST"],
-            "保存万象画卷配置",
+            "保存我能永远定格你配置",
         )
         self.context.register_web_api(
             f"/{PLUGIN_NAME}/get_usage_stats",
             self.get_usage_stats_handler,
             ["GET"],
-            "获取万象画卷当日生图统计",
+            "获取我能永远定格你当日生图统计",
         )
         self.context.register_web_api(
             f"/{PLUGIN_NAME}/get_cache_stats",
             self.get_cache_stats_handler,
             ["GET"],
-            "获取万象画卷图片缓存统计",
+            "获取我能永远定格你图片缓存统计",
         )
         self.context.register_web_api(
             f"/{PLUGIN_NAME}/clear_cache",
             self.clear_cache_handler,
             ["POST"],
-            "清理万象画卷图片缓存",
+            "清理我能永远定格你图片缓存",
         )
         self.context.register_web_api(
             f"/{PLUGIN_NAME}/get_image",
             self.get_image_handler,
             ["GET"],
-            "获取万象画卷本地参考图预览",
+            "获取我能永远定格你本地参考图预览",
         )
         self.context.register_web_api(
             f"/{PLUGIN_NAME}/generate_image_for_plugin",
@@ -264,7 +244,7 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                 else:
                     preset_name = ""
                 if preset_name in RESERVED_PRESET_NAMES:
-                    logger.warning(f"[OmniDraw] 已忽略与内置指令同名的预设: {preset_name}")
+                    logger.warning(f"[我能永远定格你] 已忽略与内置指令同名的预设: {preset_name}")
                     continue
                 filtered_presets.append(preset)
             cleaned["presets"] = filtered_presets
@@ -283,13 +263,13 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
         if str(image_generation.get("base_negative") or "").strip() != _LEGACY_BASE_NEGATIVE_DEFAULT:
             return
         image_generation["base_negative"] = DEFAULT_BASE
-        logger.info("[OmniDraw] 已把旧的「二次元/插画」默认负面词升级为当前默认值。")
+        logger.info("[我能永远定格你] 已把旧的「二次元/插画」默认负面词升级为当前默认值。")
 
     async def _send_gif_result(
         self, event: AstrMessageEvent, result: Any,
         elapsed_seconds: Optional[float] = None, include_metadata: bool = False,
     ) -> None:
-        leased_paths = []
+        leased_paths: List[str] = []
         try:
             result = await self._materialize_gif_result(result, leased_paths=leased_paths)
             path = self._get_image_result_url(result)
@@ -300,7 +280,7 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                 if File is None:
                     raise
                 # Retry delivery, never generation: some adapters reject animated images.
-                logger.warning("[OmniDraw] GIF 图片发送失败，尝试以原始 GIF 文件发送。")
+                logger.warning("[我能永远定格你] GIF 图片发送失败，尝试以原始 GIF 文件发送。")
                 await event.send(event.chain_result([File(name=os.path.basename(path), file=path)]))
         finally:
             self._release_cache_paths(leased_paths)
@@ -326,7 +306,7 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
             extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms,
         )
         gif_requested = is_gif_request(request_options)
-        leased_result_paths = []
+        leased_result_paths: List[str] = []
         try:
             async with aiohttp.ClientSession() as session:
                 raw_refs = (
@@ -356,7 +336,7 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                 )
                 leased_paths = self._lease_cache_paths(safe_refs)
 
-                kwargs = {"user_refs": safe_refs} if safe_refs else {}
+                kwargs: Dict[str, Any] = {"user_refs": safe_refs} if safe_refs else {}
                 negative_prompt = str(negative_prompt or "").strip() or self._negative_prompt_for(prompt)
                 logger.info("[生图] 正向词：%s | 负向词：%s", prompt, negative_prompt or "（空）")
                 kwargs["negative_prompt"] = negative_prompt
@@ -392,6 +372,13 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
             "leased_result_paths": leased_result_paths,
         }
 
+    def _resolve_locked_outfit(self, action: str, skip_outfit_lock: bool = False) -> str:
+        """B2c：action 点名了衣服时 OUTFIT LOCK 让位；没点名仍锁今日穿搭。"""
+        locked_outfit = self._load_locked_outfit()
+        if locked_outfit and (skip_outfit_lock or action_names_outfit(action)):
+            locked_outfit = ""
+        return locked_outfit
+
     async def _run_selfie_generation(
         self,
         event: Optional[AstrMessageEvent],
@@ -408,39 +395,19 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
         pose_lock: str = "",
         negative_prompt: str = "",
         allow_local_refs: bool = False,
+        skip_outfit_lock: bool = False,
+        pose_ref: Any = None,
     ) -> Dict[str, Any]:
-        request_options = self._image_request_options(
-            extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms,
-        )
+        request_options = self._image_request_options(extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms)
         gif_requested = is_gif_request(request_options)
-        leased_result_paths = []
+        leased_result_paths: List[str] = []
         try:
             async with aiohttp.ClientSession() as session:
                 fallback_action = action or "看着镜头微笑"
-                raw_refs = (
-                    self._as_plugin_image_refs(refs)
-                    if refs is not None
-                    else (
-                        self._get_event_images(event, include_at_avatars=True)
-                        if event is not None
-                        else []
-                    )
-                )
-                # [patched] 人设参考图与本次消息里的参考图合并，而不是互相替换
-                _persona_refs = list(self.plugin_config.persona_ref_images or [])
-                _extra_refs = list(raw_refs or [])
-                # 人设图在前、本次消息的图在后。两条来源都要一起截断：
-                # 只截合并分支的话，人设图本身超过上限时仍会在
-                # _process_and_save_images 里直接抛 ValueError，整次生图失败。
-                target_refs = (_persona_refs + _extra_refs)[:MAX_REFERENCE_IMAGES_PER_REQUEST]
-                # [patched] 有参考图时告知副脑，避免它另编人物长相
-                # [patched] 按"谁在持机"决定构图自由度：
-                #   明确让别人/他物持机 → 第三人称视角，放开全身；
-                #   其余（含"和朋友一起自拍"这类同框但自己举机）→ 自拍视角，受自拍物理限制。
-                # 关键词表见模块级 _EXTERNAL_CAMERA_HINTS；命令 /自拍 走同一个判断。
+                raw_refs, target_refs = self._selfie_target_refs(event, refs, pose_ref)
                 _has_external_camera, _is_self_shot = self._selfie_camera_flags(fallback_action)
-                # [patched] amo 当天锁定的穿搭：副脑会把它写成唯一的 clothing，别让 action 里的衣服带跑
-                locked_outfit = self._load_locked_outfit()
+                # [patched] amo 当天锁定的穿搭；B2c：action 点名衣服时让位。
+                locked_outfit = self._resolve_locked_outfit(fallback_action, skip_outfit_lock)
                 optimized_actions = [fallback_action] * count if gif_requested else await self.prompt_optimizer.optimize(
                     fallback_action, count, session=session,
                     has_reference=bool(target_refs), selfie=_is_self_shot,
@@ -457,45 +424,11 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                 try:
                     chain_to_use = "selfie" if self.plugin_config.chains.get("selfie") else "text2img"
                     chain_manager = ChainManager(self.plugin_config, session)
-                    prompts = []
-                    tasks = []
-                    # safe_refs 是处理后的绝对路径。build_persona_prompt 会另外塞一个
-                    # persona_ref（只带人设首图），而 target_refs 的第一段本来就是人设图，
-                    # 首图已经在 user_refs 里了，留着 persona_ref 就是同一张图传两次。
-                    # 这里按规范化后的路径确认它确实存在才删，处理失败的极端情况仍保留兜底。
-                    _safe_ref_set = {os.path.abspath(str(ref)) for ref in safe_refs}
-                    for optimized_action in optimized_actions:
-                        final_prompt, kwargs = self.persona_manager.build_persona_prompt(optimized_action)
-                        if locked_outfit:
-                            # 最后再钉一遍：副脑万一还是写了别的衣服，图像模型以这句为准
-                            final_prompt = (
-                                final_prompt.rstrip(", ")
-                                + ", she is wearing exactly: " + locked_outfit
-                                + "; today's outfit is fixed and must not be changed or replaced"
-                            )
-                        if safe_refs:
-                            kwargs["user_refs"] = safe_refs
-                            _persona_first = kwargs.get("persona_ref")
-                            if (
-                                _persona_first
-                                # URL 形态不参与本地路径比较（provider 侧自行处理）
-                                and not str(_persona_first).startswith(("http://", "https://"))
-                                and os.path.abspath(str(_persona_first)) in _safe_ref_set
-                            ):
-                                kwargs.pop("persona_ref", None)
-                        negative_prompt = str(negative_prompt or "").strip() or self._negative_prompt_for(final_prompt, "selfie")
-                        logger.info("[生图] 正向词：%s | 负向词：%s", final_prompt, negative_prompt or "（空）")
-                        kwargs["negative_prompt"] = negative_prompt
-                        kwargs.update(request_options)
-                        prompts.append(final_prompt)
-                        tasks.append(chain_manager.run_chain_with_metadata(chain_to_use, final_prompt, **kwargs))
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-                    if gif_requested:
-                        results = await asyncio.gather(
-                            *(self._materialize_gif_result(result, session, leased_result_paths) for result in results),
-                            return_exceptions=True,
-                        )
-                        self._prune_cache_if_needed("temp_images", protected_paths=leased_result_paths)
+                    prompts, tasks = self._build_selfie_tasks(
+                        chain_manager, chain_to_use, optimized_actions, safe_refs,
+                        locked_outfit, negative_prompt, request_options)
+                    results = await self._collect_selfie_results(
+                        tasks, gif_requested, session, leased_result_paths)
                 finally:
                     self._release_cache_paths(leased_paths)
         except BaseException:
@@ -512,6 +445,88 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
             "chain": chain_to_use,
             "leased_result_paths": leased_result_paths,
         }
+
+    def _selfie_target_refs(self, event, refs, pose_ref):
+        """姿势 → 人设三视图 → 本次消息的图；三条来源合并后统一截断。"""
+        raw_refs = (
+            self._as_plugin_image_refs(refs)
+            if refs is not None
+            else (
+                self._get_event_images(event, include_at_avatars=True)
+                if event is not None
+                else []
+            )
+        )
+        # [patched] 人设参考图与本次消息里的参考图合并，而不是互相替换
+        _persona_refs = list(self.plugin_config.persona_ref_images or [])
+        _extra_refs = list(raw_refs or [])
+        # 姿势参考图优先：只学动作，必须排在三位人设图前面，
+        # 否则 amo 的「姿势→三视图→房间→穿搭」会被改写成「三视图→姿势→...」。
+        _pose_refs = self._as_plugin_image_refs(pose_ref) if pose_ref else []
+        if _pose_refs:
+            _pose_keys = {_ref_key(item) for item in _pose_refs}
+            # refs 里可能也带了同一张姿势图（兼容旧版 amo/兜底），去重。
+            # 本地路径要按 normcase+abspath 比，否则 D:/a.png 和 D:\\a.png 会算两张。
+            _extra_refs = [item for item in _extra_refs if _ref_key(item) not in _pose_keys]
+        # 姿势 → 人设三视图 → 本次消息的图（房间/穿搭，顺序由调用方给）。
+        # 三条来源都要一起截断：只截合并分支的话，人设图本身超过上限时仍会在
+        # _process_and_save_images 里直接抛 ValueError，整次生图失败。
+        target_refs = (
+            _pose_refs + _persona_refs + _extra_refs
+        )[:MAX_REFERENCE_IMAGES_PER_REQUEST]
+        if target_refs:
+            logger.info(
+                "[生图] 参考图数量=%d 顺序=%s",
+                len(target_refs),
+                " → ".join(os.path.basename(str(ref)) for ref in target_refs),
+            )
+        return raw_refs, target_refs
+
+    def _build_selfie_tasks(self, chain_manager, chain_to_use, optimized_actions,
+                            safe_refs, locked_outfit, negative_prompt, request_options):
+        prompts = []
+        tasks = []
+        # safe_refs 是处理后的绝对路径。build_persona_prompt 会另外塞一个
+        # persona_ref（只带人设首图），而 target_refs 的第一段本来就是人设图，
+        # 首图已经在 user_refs 里了，留着 persona_ref 就是同一张图传两次。
+        # 这里按规范化后的路径确认它确实存在才删，处理失败的极端情况仍保留兜底。
+        _safe_ref_set = {os.path.abspath(str(ref)) for ref in safe_refs}
+        for optimized_action in optimized_actions:
+            final_prompt, kwargs = self.persona_manager.build_persona_prompt(optimized_action)
+            if locked_outfit:
+                # 最后再钉一遍：副脑万一还是写了别的衣服，图像模型以这句为准
+                final_prompt = (
+                    final_prompt.rstrip(", ")
+                    + ", she is wearing exactly: " + locked_outfit
+                    + "; today's outfit is fixed and must not be changed or replaced"
+                )
+            if safe_refs:
+                kwargs["user_refs"] = safe_refs
+                _persona_first = kwargs.get("persona_ref")
+                if (
+                    _persona_first
+                    # URL 形态不参与本地路径比较（provider 侧自行处理）
+                    and not str(_persona_first).startswith(("http://", "https://"))
+                    and os.path.abspath(str(_persona_first)) in _safe_ref_set
+                ):
+                    kwargs.pop("persona_ref", None)
+            negative_prompt = str(negative_prompt or "").strip() or self._negative_prompt_for(final_prompt, "selfie")
+            logger.info("[生图] 正向词：%s | 负向词：%s", final_prompt, negative_prompt or "（空）")
+            kwargs["negative_prompt"] = negative_prompt
+            kwargs.update(request_options)
+            prompts.append(final_prompt)
+            tasks.append(chain_manager.run_chain_with_metadata(chain_to_use, final_prompt, **kwargs))
+        return prompts, tasks
+
+    async def _collect_selfie_results(self, tasks, gif_requested, session, leased_result_paths):
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if gif_requested:
+            results = await asyncio.gather(
+                *(self._materialize_gif_result(result, session, leased_result_paths) for result in results),
+                return_exceptions=True,
+            )
+            self._prune_cache_if_needed("temp_images", protected_paths=leased_result_paths)
+        return results
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("添加预设", prefix_optional=True)
@@ -868,7 +883,7 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                 raw_refs = self._get_event_images(event)
                 target_refs = raw_refs if raw_refs else self.plugin_config.persona_ref_images
                 _has_external_camera, _is_self_shot = self._selfie_camera_flags(user_input)
-                locked_outfit = self._load_locked_outfit()
+                locked_outfit = self._resolve_locked_outfit(user_input)
                 optimized_actions = (
                     [user_input] if is_gif_request(kwargs)
                     else await self.prompt_optimizer.optimize(
@@ -964,7 +979,7 @@ def _align_handler_module_paths() -> int:
         if handler is not None:
             try:
                 handler.__module__ = target
-            except Exception:
+            except Exception:  # silent: 修正 handler 模块名是尽力而为，失败不影响插件注册
                 pass
         fixed += 1
     return fixed

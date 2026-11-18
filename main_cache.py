@@ -1,32 +1,51 @@
-"""万象画卷插件缓存层 mixin。"""
+"""「我能永远定格你」缓存层 mixin。"""
 
 import asyncio
 import os
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 try:
     from astrbot.api import logger
 except ImportError:
     from astrbot.api.utils import logger
-try:
+if TYPE_CHECKING:
     from .constants import (
         CACHE_DIR_NAMES,
         CACHE_IMAGE_EXTENSIONS,
         DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
         DEFAULT_MAX_CACHE_SIZE_MB,
     )
-except ImportError:
-    from constants import (
-        CACHE_DIR_NAMES,
-        CACHE_IMAGE_EXTENSIONS,
-        DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
-        DEFAULT_MAX_CACHE_SIZE_MB,
-    )
+else:
+    try:
+        from .constants import (
+            CACHE_DIR_NAMES,
+            CACHE_IMAGE_EXTENSIONS,
+            DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
+            DEFAULT_MAX_CACHE_SIZE_MB,
+        )
+    except ImportError:
+        from constants import (
+            CACHE_DIR_NAMES,
+            CACHE_IMAGE_EXTENSIONS,
+            DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
+            DEFAULT_MAX_CACHE_SIZE_MB,
+        )
+
+
+if TYPE_CHECKING:
+    from .models import PluginConfig
 
 
 class OmniDrawCacheMixin:
     """缓存层：图片缓存统计、租约、清理与定时维护。"""
+
+    data_dir: str
+    plugin_config: "PluginConfig"
+    _cache_lease_lock: Any
+    _cache_leases: Dict[str, int]
+    _to_nonnegative_int: Callable[..., int]
+    _create_background_task: Callable[..., asyncio.Task]
 
     def _cache_dir_paths(self) -> Dict[str, str]:
         return {name: os.path.abspath(os.path.join(self.data_dir, name)) for name in CACHE_DIR_NAMES}
@@ -109,7 +128,7 @@ class OmniDrawCacheMixin:
 
     def _cache_stats_for_page(self) -> Dict[str, Any]:
         dir_paths = self._cache_dir_paths()
-        dir_stats = {
+        dir_stats: Dict[str, Dict[str, Any]] = {
             name: {
                 "count": 0,
                 "bytes": 0,
@@ -154,7 +173,7 @@ class OmniDrawCacheMixin:
         dir_paths = self._cache_dir_paths()
         protected = {os.path.abspath(path) for path in (protected_paths or []) if path}
         protected.update(self._leased_cache_paths())
-        result = {
+        result: Dict[str, Any] = {
             "reason": reason,
             "deleted_count": 0,
             "deleted_bytes": 0,
@@ -208,7 +227,7 @@ class OmniDrawCacheMixin:
         result["before"] = before["total"]
         result["after"] = self._cache_stats_for_page()["total"]
         logger.info(
-            f"[OmniDraw] 缓存清理完成({reason})：删除 {result['deleted_count']} 个图片文件，"
+            f"[我能永远定格你] 缓存清理完成({reason})：删除 {result['deleted_count']} 个图片文件，"
             f"释放 {result['human_deleted_size']}。"
         )
         return result
@@ -260,7 +279,7 @@ class OmniDrawCacheMixin:
         result["before"] = {"bytes": total_bytes, "human_size": self._format_bytes(total_bytes), "count": len(files)}
         result["after"] = self._cache_stats_for_page()["total"]
         logger.info(
-            f"[OmniDraw] 缓存达到上限，自动清理 {result['deleted_count']} 个图片文件，"
+            f"[我能永远定格你] 缓存达到上限，自动清理 {result['deleted_count']} 个图片文件，"
             f"释放 {result['human_deleted_size']}。"
         )
         return result
@@ -318,7 +337,7 @@ class OmniDrawCacheMixin:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            logger.warning("[OmniDraw] 当前没有运行中的事件循环，定时缓存清理将在下次配置热加载后启动。")
+            logger.warning("[我能永远定格你] 当前没有运行中的事件循环，定时缓存清理将在下次配置热加载后启动。")
             return
 
         self._cache_cleanup_task = self._create_background_task(
@@ -326,7 +345,7 @@ class OmniDrawCacheMixin:
             kind="scheduler",
         )
         logger.info(
-            f"[OmniDraw] 已启用定时缓存清理，每 {self._cache_cleanup_interval_seconds() // 3600} 小时清理一次。"
+            f"[我能永远定格你] 已启用定时缓存清理，每 {self._cache_cleanup_interval_seconds() // 3600} 小时清理一次。"
         )
 
     async def _cache_cleanup_scheduler(self) -> None:

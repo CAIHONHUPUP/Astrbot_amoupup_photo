@@ -1,4 +1,4 @@
-"""AstrBot 万象画卷插件常量。"""
+"""AstrBot「我能永远定格你」插件常量。"""
 
 # API 超时配置
 API_TIMEOUT_DEFAULT = 60.0
@@ -67,6 +67,7 @@ PRESET_VIEW_COMMANDS = ("查看预设",)
 PRESET_LIST_COMMANDS = ("查看预设", "极速宏")
 RESERVED_PRESET_NAMES = frozenset({
     "万象帮助",
+    "定格帮助",
     "查看预设",
     "极速宏",
     "添加预设",

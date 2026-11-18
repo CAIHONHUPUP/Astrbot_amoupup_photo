@@ -147,7 +147,7 @@ class VideoManager:
                     async with session.get(
                         current_url,
                         headers=headers,
-                        timeout=15,
+                        timeout=aiohttp.ClientTimeout(total=15),
                         allow_redirects=False,
                     ) as response:
                         if 300 <= response.status < 400:
@@ -166,7 +166,7 @@ class VideoManager:
                                     raise VideoTaskError(
                                         f"视频参考图超过 {MAX_REFERENCE_IMAGE_BYTES // (1024 * 1024)} MB 大小上限。"
                                     )
-                            except ValueError:
+                            except ValueError:  # silent: Content-Length 不是整数时不做超限判断
                                 pass
                         response_content = getattr(response, "content", None)
                         if response_content is not None and hasattr(response_content, "iter_chunked"):
@@ -245,7 +245,7 @@ class VideoManager:
         consecutive_errors = 0
 
         async def request_once(request_timeout: float) -> Optional[Dict[str, Any]]:
-            async with session.get(poll_url, headers=headers, timeout=min(15.0, request_timeout)) as response:
+            async with session.get(poll_url, headers=headers, timeout=aiohttp.ClientTimeout(total=min(15.0, request_timeout))) as response:
                 if response.status >= 400:
                     logger.warning(f"⚠️ 轮询请求失败: {await self._read_error(response)}")
                     return None
@@ -343,7 +343,7 @@ class VideoManager:
             b64_images.append(b64_image)
 
         if api_type.startswith("async_task"):
-            payload = {"model": provider.model, "prompt": prompt}
+            payload: Dict[str, Any] = {"model": provider.model, "prompt": prompt}
             if b64_images:
                 payload["images"] = b64_images
             payload.update(api_kwargs)
@@ -353,7 +353,7 @@ class VideoManager:
                 endpoint,
                 headers=headers,
                 json=payload,
-                timeout=min(30.0, max(1.0, provider_timeout)),
+                timeout=aiohttp.ClientTimeout(total=min(30.0, max(1.0, provider_timeout))),
             ) as response:
                 if response.status >= 400:
                     raise VideoTaskError(await self._read_error(response))
@@ -381,7 +381,7 @@ class VideoManager:
             payload.update(api_kwargs)
 
             logger.info(f"🎬 [Sync 模式] 阻塞请求视频至: {endpoint}")
-            async with session.post(endpoint, headers=headers, json=payload, timeout=provider_timeout) as response:
+            async with session.post(endpoint, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=provider_timeout)) as response:
                 if response.status >= 400:
                     raise VideoTaskError(await self._read_error(response))
                 data = await response.json()
@@ -397,14 +397,14 @@ class VideoManager:
 
         if api_type.startswith("openai_chat"):
             endpoint = self._chat_endpoint(base_url)
-            content = [{"type": "text", "text": prompt}]
+            content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
             for b64_image in b64_images:
                 content.append({"type": "image_url", "image_url": {"url": b64_image}})
             payload = {"model": provider.model, "messages": [{"role": "user", "content": content}]}
             payload.update(api_kwargs)
 
             logger.info(f"🎬 [Chat 模式] 请求视频至: {endpoint}")
-            async with session.post(endpoint, headers=headers, json=payload, timeout=provider_timeout) as response:
+            async with session.post(endpoint, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=provider_timeout)) as response:
                 if response.status >= 400:
                     raise VideoTaskError(await self._read_error(response))
                 data = await response.json()

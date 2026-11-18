@@ -919,7 +919,7 @@ function renderPersonaImages() {
 function pagePreviewToken(ref) {
     try {
         const parsed = new URL(ref, location.href);
-        return parsed.pathname.endsWith("/astrbot_plugin_omnidraw/get_image") ? parsed.searchParams.get("token") : null;
+        return parsed.pathname.endsWith("/Astrbot_amoupup_photo/get_image") ? parsed.searchParams.get("token") : null;
     } catch {
         return null;
     }

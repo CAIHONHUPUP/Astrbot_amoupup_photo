@@ -1,4 +1,4 @@
-"""万象画卷插件命令层 mixin。"""
+"""「我能永远定格你」命令层 mixin。"""
 
 import asyncio
 import copy
@@ -7,7 +7,7 @@ import os
 import random
 import re
 import time
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 import aiohttp
 
 try:
@@ -25,7 +25,7 @@ try:
 except Exception:
     def get_astrbot_data_path() -> str:
         return os.path.join(os.getcwd(), "data")
-try:
+if TYPE_CHECKING:
     from .constants import (
         DEFAULT_BATCH_LIMIT,
         DEFAULT_DRAW_ERROR_MESSAGE,
@@ -40,27 +40,80 @@ try:
     from .core.image_options import normalize_gif_options
     from .models import PLUGIN_VERSION
     from .utils import handle_errors
-except ImportError:
-    from constants import (
-        DEFAULT_BATCH_LIMIT,
-        DEFAULT_DRAW_ERROR_MESSAGE,
-        DEFAULT_SELFIE_ERROR_MESSAGE,
-        LEGACY_COMMAND_PREFIXES,
-        MessageEmoji,
-        PRESET_LIST_COMMANDS,
-        PRESET_VIEW_COMMANDS,
-        RESERVED_GENERATION_PARAM_KEYS,
-        RESERVED_PRESET_NAMES,
-    )
-    from core.image_options import normalize_gif_options
-    from models import PLUGIN_VERSION
-    from utils import handle_errors
+else:
+    try:
+        from .constants import (
+            DEFAULT_BATCH_LIMIT,
+            DEFAULT_DRAW_ERROR_MESSAGE,
+            DEFAULT_SELFIE_ERROR_MESSAGE,
+            LEGACY_COMMAND_PREFIXES,
+            MessageEmoji,
+            PRESET_LIST_COMMANDS,
+            PRESET_VIEW_COMMANDS,
+            RESERVED_GENERATION_PARAM_KEYS,
+            RESERVED_PRESET_NAMES,
+        )
+        from .core.image_options import normalize_gif_options
+        from .models import PLUGIN_VERSION
+        from .utils import handle_errors
+    except ImportError:
+        from constants import (
+            DEFAULT_BATCH_LIMIT,
+            DEFAULT_DRAW_ERROR_MESSAGE,
+            DEFAULT_SELFIE_ERROR_MESSAGE,
+            LEGACY_COMMAND_PREFIXES,
+            MessageEmoji,
+            PRESET_LIST_COMMANDS,
+            PRESET_VIEW_COMMANDS,
+            RESERVED_GENERATION_PARAM_KEYS,
+            RESERVED_PRESET_NAMES,
+        )
+        from core.image_options import normalize_gif_options
+        from models import PLUGIN_VERSION
+        from utils import handle_errors
+
+
+if TYPE_CHECKING:
+    from .core.parser import CommandParser
+    from .core.video_manager import VideoManager
+    from .models import PluginConfig
 
 
 class OmniDrawCommandMixin:
     """命令层：指令入口、权限与配额判定、命令文案与预设。"""
 
-    @filter.command("万象帮助")
+    plugin_config: "PluginConfig"
+    raw_config: Dict[str, Any]
+    cmd_parser: "CommandParser"
+    video_manager: "VideoManager"
+    _config_lock: Any
+    _usage_lock: Any
+    _usage_stats: Dict[str, Any]
+    _quota_reservations: Dict[str, int]
+    _to_nonnegative_int: Callable[..., int]
+    _create_background_task: Callable[..., asyncio.Task]
+    _release_cache_paths: Callable[..., None]
+    _clear_cache_images: Callable[..., Dict[str, Any]]
+    _persist_usage_stats: Callable[..., None]
+    _normalize_usage_stats: Callable[..., Dict[str, Any]]
+    _current_usage_stats: Callable[..., Dict[str, Any]]
+    _run_draw_command: Callable[..., Any]
+    _get_event_images: Callable[..., Any]
+    _process_and_save_images: Callable[..., Any]
+    _unwrap_tool_event: Callable[..., Any]
+    _plugin_bool: Callable[..., bool]
+    generate_images_for_plugin: Callable[..., Any]
+    _get_image_result_url: Callable[..., Any]
+    _generation_failure_message: Callable[..., Any]
+    _send_generated_images: Callable[..., Any]
+    _safe_plugin_error_message: Callable[..., Any]
+    _load_json_file: Callable[..., Dict[str, Any]]
+    _refresh_from_native_config_if_changed: Callable[..., None]
+    _save_page_config: Callable[..., Any]
+    _run_selfie_generation: Callable[..., Any]
+    _run_text2img_generation: Callable[..., Any]
+
+    @filter.command("万象帮助", alias={"定格帮助"})
     @handle_errors
     async def cmd_help(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
         prefix = self._display_command_prefix()
@@ -69,7 +122,7 @@ class OmniDrawCommandMixin:
             return f"{prefix}{name}" if prefix else name
 
         msg = (
-            f"📖 万象画卷 v{PLUGIN_VERSION}\n"
+            f"📖 我能永远定格你 v{PLUGIN_VERSION}\n"
             f"{cmd('画')} [提示词] [--参数 值]\n"
             f"{cmd('gif')} [动作描述] [--frame_count 9 --frame_duration_ms 200]\n"
             f"{cmd('自拍')} [动作] [--参数 值]\n"
@@ -83,7 +136,7 @@ class OmniDrawCommandMixin:
             f"{cmd('查看预设')} [预设名]\n"
             f"{cmd('添加预设')} [预设名] [提示词]\n"
             f"{cmd('删除预设')} [预设名]\n"
-            f"{cmd('万象帮助')}\n\n"
+            f"{cmd('定格帮助')}（旧名 {cmd('万象帮助')}）\n\n"
             "GIF：使用 gpt-image-2.6-sunburst / flare 且开通 GIF 预览权限的 Images 节点。\n"
             "帧数 2–16，帧间隔 20–2000ms，默认 size=auto；自拍可加 --output_format gif。\n\n"
         )
@@ -395,7 +448,7 @@ class OmniDrawCommandMixin:
             raise
         except Exception as exc:
             self._release_image_quota(event, reserved_count)
-            logger.error(f"[OmniDraw] LLM 自拍工具失败: {exc}", exc_info=True)
+            logger.error(f"[我能永远定格你] LLM 自拍工具失败: {exc}", exc_info=True)
             if self._plugin_bool(return_result, default=False):
                 return json.dumps({
                     "success": False,
@@ -495,7 +548,7 @@ class OmniDrawCommandMixin:
             raise
         except Exception as exc:
             self._release_image_quota(event, reserved_count)
-            logger.error(f"[OmniDraw] LLM 画图工具失败: {exc}", exc_info=True)
+            logger.error(f"[我能永远定格你] LLM 画图工具失败: {exc}", exc_info=True)
             if self._plugin_bool(return_result, default=False):
                 return json.dumps({
                     "success": False,
@@ -569,7 +622,7 @@ class OmniDrawCommandMixin:
                 return "系统提示：后台视频任务队列已满，请稍后再试。"
             return f"系统提示：已在后台独立提交了 {accepted} 个视频渲染任务。请告诉用户正在渲染中。"
         except Exception as exc:
-            logger.error(f"[OmniDraw] LLM 视频工具失败: {exc}", exc_info=True)
+            logger.error(f"[我能永远定格你] LLM 视频工具失败: {exc}", exc_info=True)
             return f"系统提示：失败 ({self._safe_plugin_error_message(exc)})。"
 
     def _extract_at_user_id(self, obj: Any) -> str:
@@ -655,7 +708,7 @@ class OmniDrawCommandMixin:
         if callable(stop_event):
             try:
                 stop_event()
-            except Exception:
+            except Exception:  # silent: 停止事件回调是尽力而为，异常不阻断主流程
                 pass
 
     async def _send_plain_message(self, event: AstrMessageEvent, message: str) -> Optional[Any]:
@@ -665,7 +718,7 @@ class OmniDrawCommandMixin:
             try:
                 await send(result)
             except Exception as exc:
-                logger.warning(f"[OmniDraw] 等待提示发送失败，生成任务继续执行: {exc}")
+                logger.warning(f"[我能永远定格你] 等待提示发送失败，生成任务继续执行: {exc}")
             return None
         return result
 
@@ -696,7 +749,7 @@ class OmniDrawCommandMixin:
             sender_id = event.get_sender_id()
             if sender_id:
                 return str(sender_id)
-        except Exception:
+        except Exception:  # silent: get_sender_id 缺失时走 message_obj 兜底
             pass
 
         message_obj = getattr(event, "message_obj", None)
@@ -714,7 +767,7 @@ class OmniDrawCommandMixin:
                     value = method()
                     if value:
                         return str(value)
-                except Exception:
+                except Exception:  # silent: 可选 sender 方法探测，异常视为没有
                     pass
 
         message_obj = getattr(event, "message_obj", None)
@@ -734,7 +787,7 @@ class OmniDrawCommandMixin:
                 raw_value = getattr(value, "value", value)
                 if "group" in str(raw_value).lower():
                     return True
-            except Exception:
+            except Exception:  # silent: 群聊类型探测失败按非群聊处理
                 pass
 
         message_obj = getattr(event, "message_obj", None)
@@ -754,7 +807,7 @@ class OmniDrawCommandMixin:
                     value = method()
                     if value:
                         return str(value)
-                except Exception:
+                except Exception:  # silent: get_group_id 可选，缺失时走属性兜底
                     pass
 
         message_obj = getattr(event, "message_obj", None)
@@ -772,7 +825,7 @@ class OmniDrawCommandMixin:
                         value = str(method() or "").strip()
                         if value:
                             return value
-                    except Exception:
+                    except Exception:  # silent: session_id 推断群号失败时继续扫属性
                         pass
             for obj in (event, message_obj):
                 value = str(getattr(obj, "session_id", "") or "").strip()
@@ -787,7 +840,7 @@ class OmniDrawCommandMixin:
                     group_id = self._extract_group_id_from_text(value)
                     if group_id:
                         return group_id
-                except Exception:
+                except Exception:  # silent: session_id 文本解析群号失败时继续扫属性
                     pass
 
         for obj in (event, message_obj):
@@ -862,8 +915,8 @@ class OmniDrawCommandMixin:
         if status.get("allowed", True):
             return ""
         if status.get("level") == "not_usable_user":
-            return f"{MessageEmoji.WARNING} 当前仅允许可使用人员白名单内用户使用万象画卷。"
-        return f"{MessageEmoji.WARNING} 你已被加入用户黑名单，无法使用万象画卷。"
+            return f"{MessageEmoji.WARNING} 当前仅允许可使用人员白名单内用户使用「我能永远定格你」。"
+        return f"{MessageEmoji.WARNING} 你已被加入用户黑名单，无法使用「我能永远定格你」。"
 
     def _get_event_text(self, event: AstrMessageEvent) -> str:
         text = getattr(event, "message_str", "") or getattr(getattr(event, "message_obj", None), "message_str", "")
@@ -1089,7 +1142,7 @@ class OmniDrawCommandMixin:
             if not key:
                 continue
             if key.lower() in RESERVED_GENERATION_PARAM_KEYS:
-                logger.warning(f"[OmniDraw] 已忽略不允许透传的生成参数: {key}")
+                logger.warning(f"[我能永远定格你] 已忽略不允许透传的生成参数: {key}")
                 continue
             sanitized[key] = value
         return sanitized
@@ -1098,7 +1151,7 @@ class OmniDrawCommandMixin:
         self, extra_params: str, aspect_ratio: str, size: str,
         use_gif: bool = False, frame_count: int = 9, frame_duration_ms: int = 200,
     ) -> Dict[str, Any]:
-        options = {}
+        options: Dict[str, Any] = {}
         if aspect_ratio:
             options["aspect_ratio"] = aspect_ratio
         if size:
@@ -1227,7 +1280,7 @@ class OmniDrawCommandMixin:
         if any(prefix and preset_name.startswith(prefix) for prefix in self._command_prefixes()):
             return "预设名不需要包含指令前缀。"
         if preset_name in RESERVED_PRESET_NAMES:
-            return "预设名不能与万象画卷内置指令同名。"
+            return "预设名不能与「我能永远定格你」内置指令同名。"
         return ""
 
     def _replace_presets(self, presets: Dict[str, str]) -> None:
@@ -1382,7 +1435,7 @@ class OmniDrawCommandMixin:
                 return self.plugin_config.personas[index - 1]
             if index == 0 and self.plugin_config.personas:
                 return self.plugin_config.personas[0]
-        except ValueError:
+        except ValueError:  # silent: 人物 selector 不是整数，按 id/名字匹配
             pass
 
         selector_lower = selector.lower()
@@ -1417,7 +1470,7 @@ class OmniDrawCommandMixin:
         if last is None:
             return ""
         if time.monotonic() - last < window:
-            logger.info("[OmniDraw] 同一轮重复调用 generate_selfie，已跳过（umo=%s）", umo[:48])
+            logger.info("[我能永远定格你] 同一轮重复调用 generate_selfie，已跳过（umo=%s）", umo[:48])
             return "系统提示：这一轮已经生成并下发过一张了，不重复生成；要换姿势请说明再发。"
         return ""
 

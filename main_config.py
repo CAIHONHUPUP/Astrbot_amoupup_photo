@@ -1,4 +1,4 @@
-"""万象画卷配置/页面层 mixin。"""
+"""「我能永远定格你」配置/页面层 mixin。"""
 
 import asyncio
 import base64
@@ -10,7 +10,7 @@ import mimetypes
 import os
 import time
 import uuid
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 from quart import jsonify, request, send_file
@@ -26,7 +26,7 @@ except Exception:
     def get_astrbot_data_path() -> str:
         return os.path.join(os.getcwd(), "data")
 
-try:
+if TYPE_CHECKING:
     from .constants import (
         DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
         DEFAULT_DRAW_ERROR_MESSAGE,
@@ -49,32 +49,75 @@ try:
     from .core.video_manager import VideoManager
     from .models import PLUGIN_NAME, PluginConfig, _cleanup_unused_persona_refs
     from .utils import split_data_url
-except ImportError:  # 顶层导入（测试/脚本）
-    from constants import (
-        DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
-        DEFAULT_DRAW_ERROR_MESSAGE,
-        DEFAULT_DRAW_PENDING_MESSAGE,
-        DEFAULT_MAX_CACHE_SIZE_MB,
-        DEFAULT_SELFIE_ERROR_MESSAGE,
-        DEFAULT_SELFIE_PENDING_MESSAGE,
-        LEGACY_PERSONA_CONFIG_KEYS,
-        MASKED_API_KEY_PREFIX,
-        MAX_CONFIG_REQUEST_BYTES,
-        MAX_EXTRA_PARAMS_CHARS,
-        MAX_PAGE_IMAGE_TOKENS,
-        MAX_PLUGIN_REQUEST_BYTES,
-        MAX_PROMPT_CHARS,
-        NATIVE_ACTIVE_PERSONA_FILE_PREFIX,
-        PAGE_PREVIEW_IMAGE_BYTES,
-    )
-    from core.persona_manager import PersonaManager
-    from core.prompt_optimizer import PromptOptimizer
-    from core.video_manager import VideoManager
-    from models import PLUGIN_NAME, PluginConfig, _cleanup_unused_persona_refs
-    from utils import split_data_url
+else:
+    try:
+        from .constants import (
+            DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
+            DEFAULT_DRAW_ERROR_MESSAGE,
+            DEFAULT_DRAW_PENDING_MESSAGE,
+            DEFAULT_MAX_CACHE_SIZE_MB,
+            DEFAULT_SELFIE_ERROR_MESSAGE,
+            DEFAULT_SELFIE_PENDING_MESSAGE,
+            LEGACY_PERSONA_CONFIG_KEYS,
+            MASKED_API_KEY_PREFIX,
+            MAX_CONFIG_REQUEST_BYTES,
+            MAX_EXTRA_PARAMS_CHARS,
+            MAX_PAGE_IMAGE_TOKENS,
+            MAX_PLUGIN_REQUEST_BYTES,
+            MAX_PROMPT_CHARS,
+            NATIVE_ACTIVE_PERSONA_FILE_PREFIX,
+            PAGE_PREVIEW_IMAGE_BYTES,
+        )
+        from .core.persona_manager import PersonaManager
+        from .core.prompt_optimizer import PromptOptimizer
+        from .core.video_manager import VideoManager
+        from .models import PLUGIN_NAME, PluginConfig, _cleanup_unused_persona_refs
+        from .utils import split_data_url
+    except ImportError:  # 顶层导入（测试/脚本）
+        from constants import (
+            DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
+            DEFAULT_DRAW_ERROR_MESSAGE,
+            DEFAULT_DRAW_PENDING_MESSAGE,
+            DEFAULT_MAX_CACHE_SIZE_MB,
+            DEFAULT_SELFIE_ERROR_MESSAGE,
+            DEFAULT_SELFIE_PENDING_MESSAGE,
+            LEGACY_PERSONA_CONFIG_KEYS,
+            MASKED_API_KEY_PREFIX,
+            MAX_CONFIG_REQUEST_BYTES,
+            MAX_EXTRA_PARAMS_CHARS,
+            MAX_PAGE_IMAGE_TOKENS,
+            MAX_PLUGIN_REQUEST_BYTES,
+            MAX_PROMPT_CHARS,
+            NATIVE_ACTIVE_PERSONA_FILE_PREFIX,
+            PAGE_PREVIEW_IMAGE_BYTES,
+        )
+        from core.persona_manager import PersonaManager
+        from core.prompt_optimizer import PromptOptimizer
+        from core.video_manager import VideoManager
+        from models import PLUGIN_NAME, PluginConfig, _cleanup_unused_persona_refs
+        from utils import split_data_url
 
 
 class OmniDrawConfigMixin:
+
+    data_dir: str
+    config_path: str
+    usage_stats_path: str
+    context: Any
+    _config_lock: Any
+    _usage_lock: Any
+    _usage_stats: Dict[str, Any]
+    _daily_image_limit: Callable[..., int]
+    _native_config: Any
+    _native_config_path: str
+    _page_image_secret: str
+    _page_image_lock: Any
+    _page_image_tokens: Dict[str, str]
+    _clean_runtime_config: Callable[..., Dict[str, Any]]
+    _restart_cache_cleanup_task: Callable[..., None]
+    _prune_cache_if_needed: Callable[..., Dict[str, Any]]
+    _looks_like_image_bytes: Callable[..., bool]
+    _validate_local_image_path: Callable[..., str]
     def _resolve_data_dir(self) -> str:
         base_data_dir = str(get_astrbot_data_path())
         return os.path.join(base_data_dir, "plugin_data", PLUGIN_NAME)
@@ -113,7 +156,7 @@ class OmniDrawConfigMixin:
                 data = json.load(file)
             return data if isinstance(data, dict) else {}
         except Exception as exc:
-            logger.error(f"[OmniDraw] 读取配置失败: {path} {exc}", exc_info=True)
+            logger.error(f"[我能永远定格你] 读取配置失败: {path} {exc}", exc_info=True)
             return {}
 
     def _today_key(self) -> str:
@@ -180,11 +223,11 @@ class OmniDrawConfigMixin:
                     json.dump(self._current_usage_stats(), file, ensure_ascii=False, indent=4)
                 os.replace(tmp_path, self.usage_stats_path)
             except Exception as exc:
-                logger.error(f"[OmniDraw] 生图统计保存失败: {exc}", exc_info=True)
+                logger.error(f"[我能永远定格你] 生图统计保存失败: {exc}", exc_info=True)
                 try:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
-                except OSError:
+                except OSError:  # silent: 删临时文件失败不阻断统计保存
                     pass
 
     def _usage_stats_for_page(self) -> Dict[str, Any]:
@@ -399,117 +442,150 @@ class OmniDrawConfigMixin:
             return True
 
         permission_config = config.get("permission_config")
-        if isinstance(permission_config, dict):
-            for key in (
-                "usable_users",
-                "access_users",
-                "use_whitelist",
-                "allowed_users",
-                "unlimited_users",
-                "user_whitelist",
-                "blocked_users",
-                "user_blacklist",
-                "unlimited_groups",
-                "group_whitelist",
-            ):
-                if str(permission_config.get(key, "")).strip():
-                    return True
+        if isinstance(permission_config, dict) and self._permission_has_payload(permission_config):
+            return True
 
         usage_config = config.get("usage_config")
-        if isinstance(usage_config, dict):
-            if bool(usage_config.get("enable_daily_limit")):
-                return True
-            if self._to_nonnegative_int(usage_config.get("daily_image_limit", 20), 20) != 20:
-                return True
-            if bool(usage_config.get("enable_checkin")):
-                return True
-            if self._to_nonnegative_int(usage_config.get("checkin_bonus_min", 1), 1) != 1:
-                return True
-            if self._to_nonnegative_int(usage_config.get("checkin_bonus_max", 3), 3) != 3:
-                return True
+        if isinstance(usage_config, dict) and self._usage_has_payload(usage_config):
+            return True
 
         cache_config = config.get("cache_config")
-        if isinstance(cache_config, dict):
-            if bool(cache_config.get("enable_scheduled_cleanup")):
-                return True
-            if self._to_nonnegative_int(
-                cache_config.get("scheduled_cleanup_interval_hours", DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS),
-                DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
-            ) != DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS:
-                return True
-            if bool(cache_config.get("enable_size_limit_cleanup")):
-                return True
-            if self._to_nonnegative_int(
-                cache_config.get("max_cache_size_mb", DEFAULT_MAX_CACHE_SIZE_MB),
-                DEFAULT_MAX_CACHE_SIZE_MB,
-            ) != DEFAULT_MAX_CACHE_SIZE_MB:
-                return True
+        if isinstance(cache_config, dict) and self._cache_has_payload(cache_config):
+            return True
 
         reply_config = config.get("reply_config")
-        if isinstance(reply_config, dict):
-            reply_defaults = {
-                "draw_pending_message": DEFAULT_DRAW_PENDING_MESSAGE,
-                "selfie_pending_message": DEFAULT_SELFIE_PENDING_MESSAGE,
-                "draw_error_message": DEFAULT_DRAW_ERROR_MESSAGE,
-                "selfie_error_message": DEFAULT_SELFIE_ERROR_MESSAGE,
-            }
-            for key, default in reply_defaults.items():
-                value = str(reply_config.get(key, "")).strip()
-                if value and value != default:
-                    return True
+        if isinstance(reply_config, dict) and self._reply_has_payload(reply_config):
+            return True
 
         router_config = config.get("router_config")
-        if isinstance(router_config, dict):
-            route_defaults = {
-                "chain_text2img": "node_1",
-                "chain_selfie": "node_1",
-                "chain_video": "video_node_1",
-            }
-            for key, default in route_defaults.items():
-                value = router_config.get(key)
-                if value not in (None, "", default):
-                    return True
+        if isinstance(router_config, dict) and self._router_has_payload(router_config):
+            return True
 
         optimizer_config = config.get("optimizer_config")
-        if isinstance(optimizer_config, dict):
-            optimizer_defaults = {
-                "enable_optimizer": True,
-                "optimizer_style": "手机日常原生感",
-                "chain_optimizer": "node_1",
-                "optimizer_model": "gpt-4o-mini",
-                "optimizer_timeout": 15,
-                "max_batch_count": 0,
-                "optimizer_custom_prompt": "",
-            }
-            for key, default in optimizer_defaults.items():
-                value = optimizer_config.get(key)
-                if value not in (None, "", default):
-                    return True
+        if isinstance(optimizer_config, dict) and self._optimizer_has_payload(optimizer_config):
+            return True
 
         persona_config = config.get("persona_config")
-        if isinstance(persona_config, dict):
-            if persona_config.get("active_persona_id") not in (None, "", "default"):
+        if isinstance(persona_config, dict) and self._persona_has_payload(persona_config):
+            return True
+        return False
+
+    @staticmethod
+    def _permission_has_payload(permission_config: Dict[str, Any]) -> bool:
+        for key in (
+            "usable_users",
+            "access_users",
+            "use_whitelist",
+            "allowed_users",
+            "unlimited_users",
+            "user_whitelist",
+            "blocked_users",
+            "user_blacklist",
+            "unlimited_groups",
+            "group_whitelist",
+        ):
+            if str(permission_config.get(key, "")).strip():
                 return True
-            profiles = persona_config.get("profiles")
-            if isinstance(profiles, list) and profiles:
-                for index, profile in enumerate(profiles):
-                    if not isinstance(profile, dict):
-                        continue
-                    default_name = "默认助理" if index == 0 else f"人设 {index + 1}"
-                    if str(profile.get("id", "")).strip() not in ("", "default" if index == 0 else f"persona_{index + 1}"):
-                        return True
-                    if str(profile.get("persona_name", "")).strip() not in ("", default_name):
-                        return True
-                    if str(profile.get("persona_base_prompt", "")).strip():
-                        return True
-                    if profile.get("persona_ref_image"):
-                        return True
-            if str(persona_config.get("persona_name", "")).strip() not in ("", "默认助理"):
+        return False
+
+    def _usage_has_payload(self, usage_config: Dict[str, Any]) -> bool:
+        if bool(usage_config.get("enable_daily_limit")):
+            return True
+        if self._to_nonnegative_int(usage_config.get("daily_image_limit", 20), 20) != 20:
+            return True
+        if bool(usage_config.get("enable_checkin")):
+            return True
+        if self._to_nonnegative_int(usage_config.get("checkin_bonus_min", 1), 1) != 1:
+            return True
+        if self._to_nonnegative_int(usage_config.get("checkin_bonus_max", 3), 3) != 3:
+            return True
+        return False
+
+    def _cache_has_payload(self, cache_config: Dict[str, Any]) -> bool:
+        if bool(cache_config.get("enable_scheduled_cleanup")):
+            return True
+        if self._to_nonnegative_int(
+            cache_config.get("scheduled_cleanup_interval_hours", DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS),
+            DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS,
+        ) != DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS:
+            return True
+        if bool(cache_config.get("enable_size_limit_cleanup")):
+            return True
+        if self._to_nonnegative_int(
+            cache_config.get("max_cache_size_mb", DEFAULT_MAX_CACHE_SIZE_MB),
+            DEFAULT_MAX_CACHE_SIZE_MB,
+        ) != DEFAULT_MAX_CACHE_SIZE_MB:
+            return True
+        return False
+
+    @staticmethod
+    def _reply_has_payload(reply_config: Dict[str, Any]) -> bool:
+        reply_defaults = {
+            "draw_pending_message": DEFAULT_DRAW_PENDING_MESSAGE,
+            "selfie_pending_message": DEFAULT_SELFIE_PENDING_MESSAGE,
+            "draw_error_message": DEFAULT_DRAW_ERROR_MESSAGE,
+            "selfie_error_message": DEFAULT_SELFIE_ERROR_MESSAGE,
+        }
+        for key, default in reply_defaults.items():
+            value = str(reply_config.get(key, "")).strip()
+            if value and value != default:
                 return True
-            if str(persona_config.get("persona_base_prompt", "")).strip():
+        return False
+
+    @staticmethod
+    def _router_has_payload(router_config: Dict[str, Any]) -> bool:
+        route_defaults = {
+            "chain_text2img": "node_1",
+            "chain_selfie": "node_1",
+            "chain_video": "video_node_1",
+        }
+        for key, default in route_defaults.items():
+            value = router_config.get(key)
+            if value not in (None, "", default):
                 return True
-            if persona_config.get("persona_ref_image") or persona_config.get("persona_ref_images"):
+        return False
+
+    @staticmethod
+    def _optimizer_has_payload(optimizer_config: Dict[str, Any]) -> bool:
+        optimizer_defaults = {
+            "enable_optimizer": True,
+            "optimizer_style": "手机日常原生感",
+            "chain_optimizer": "node_1",
+            "optimizer_model": "gpt-4o-mini",
+            "optimizer_timeout": 15,
+            "max_batch_count": 0,
+            "optimizer_custom_prompt": "",
+        }
+        for key, default in optimizer_defaults.items():
+            value = optimizer_config.get(key)
+            if value not in (None, "", default):
                 return True
+        return False
+
+    @staticmethod
+    def _persona_has_payload(persona_config: Dict[str, Any]) -> bool:
+        if persona_config.get("active_persona_id") not in (None, "", "default"):
+            return True
+        profiles = persona_config.get("profiles")
+        if isinstance(profiles, list) and profiles:
+            for index, profile in enumerate(profiles):
+                if not isinstance(profile, dict):
+                    continue
+                default_name = "默认助理" if index == 0 else f"人设 {index + 1}"
+                if str(profile.get("id", "")).strip() not in ("", "default" if index == 0 else f"persona_{index + 1}"):
+                    return True
+                if str(profile.get("persona_name", "")).strip() not in ("", default_name):
+                    return True
+                if str(profile.get("persona_base_prompt", "")).strip():
+                    return True
+                if profile.get("persona_ref_image"):
+                    return True
+        if str(persona_config.get("persona_name", "")).strip() not in ("", "默认助理"):
+            return True
+        if str(persona_config.get("persona_base_prompt", "")).strip():
+            return True
+        if persona_config.get("persona_ref_image") or persona_config.get("persona_ref_images"):
+            return True
         return False
 
     def _load_initial_config(self, fallback_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -532,9 +608,9 @@ class OmniDrawConfigMixin:
                     data = json.load(file)
                 if isinstance(data, dict):
                     return self._clean_runtime_config(data)
-                logger.warning("[OmniDraw] 本地配置不是 JSON 对象，已回退到 AstrBot 原生配置。")
+                logger.warning("[我能永远定格你] 本地配置不是 JSON 对象，已回退到 AstrBot 原生配置。")
             except Exception as exc:
-                logger.error(f"[OmniDraw] 读取本地持久化配置失败: {exc}", exc_info=True)
+                logger.error(f"[我能永远定格你] 读取本地持久化配置失败: {exc}", exc_info=True)
         return native_config
 
     def _apply_runtime_config(self, raw_config: Dict[str, Any]) -> None:
@@ -560,7 +636,7 @@ class OmniDrawConfigMixin:
             active_refs = [ref for profile in self.plugin_config.personas for ref in profile.ref_images]
             _cleanup_unused_persona_refs(os.path.join(self.data_dir, "persona_refs"), active_refs)
         except Exception as exc:
-            logger.warning(f"[OmniDraw] 清理未使用的人设参考图失败，已保留文件: {exc}")
+            logger.warning(f"[我能永远定格你] 清理未使用的人设参考图失败，已保留文件: {exc}")
 
     def _prepare_runtime_config(self, raw_config: Dict[str, Any]) -> Dict[str, Any]:
         candidate = self._clean_runtime_config(raw_config if isinstance(raw_config, dict) else {})
@@ -582,7 +658,7 @@ class OmniDrawConfigMixin:
                 if os.path.exists(tmp_path):
                     try:
                         os.remove(tmp_path)
-                    except OSError:
+                    except OSError:  # silent: 删临时配置失败不阻断保存
                         pass
 
     def _safe_update_context_config(self) -> None:
@@ -604,16 +680,16 @@ class OmniDrawConfigMixin:
                 try:
                     self._native_config.clear()
                     self._native_config.update(previous_native)
-                except Exception:
+                except Exception:  # silent: 回滚 native config 失败已由下方 warning 记录
                     pass
-                logger.warning(f"[OmniDraw] AstrBot 原生配置同步失败，已保留本地持久化配置: {exc}")
+                logger.warning(f"[我能永远定格你] AstrBot 原生配置同步失败，已保留本地持久化配置: {exc}")
 
         if not hasattr(self.context, "update_config"):
             return
         try:
             self.context.update_config(self.raw_config)
         except Exception as exc:
-            logger.warning(f"[OmniDraw] AstrBot 主配置同步失败，已保留本地持久化配置: {exc}")
+            logger.warning(f"[我能永远定格你] AstrBot 主配置同步失败，已保留本地持久化配置: {exc}")
 
     def _refresh_from_native_config_if_changed(self) -> None:
         if not self._native_config_path:
@@ -658,7 +734,7 @@ class OmniDrawConfigMixin:
                 if self._native_config is not None:
                     self._native_config.clear()
                     self._native_config.update(self._config_for_native_page())
-                logger.info("[OmniDraw] 已从 AstrBot 原生配置热同步最新设置。")
+                logger.info("[我能永远定格你] 已从 AstrBot 原生配置热同步最新设置。")
             except Exception:
                 self.raw_config = previous_raw
                 (
@@ -671,7 +747,7 @@ class OmniDrawConfigMixin:
                     try:
                         self._persist_config()
                     except Exception as rollback_exc:
-                        logger.error(f"[OmniDraw] 原生配置热同步回滚持久化失败: {rollback_exc}", exc_info=True)
+                        logger.error(f"[我能永远定格你] 原生配置热同步回滚持久化失败: {rollback_exc}", exc_info=True)
                 raise
             self._cleanup_persona_refs()
 
@@ -902,7 +978,7 @@ class OmniDrawConfigMixin:
             status_code = 200 if result.get("success") else 500
             return jsonify(result), status_code
         except Exception as exc:
-            logger.error(f"[OmniDraw] 插件生图 API 失败: {exc}", exc_info=True)
+            logger.error(f"[我能永远定格你] 插件生图 API 失败: {exc}", exc_info=True)
             return jsonify({
                 "success": False,
                 "message": f"画图失败 ({self._safe_plugin_error_message(exc)})。",
@@ -924,7 +1000,7 @@ class OmniDrawConfigMixin:
                 except Exception:
                     break
             if not save_task.cancelled() and save_task.exception() is not None:
-                logger.error(f"[OmniDraw] 调用方取消后配置操作失败: {save_task.exception()}")
+                logger.error(f"[我能永远定格你] 调用方取消后配置操作失败: {save_task.exception()}")
             raise
 
     async def save_config_handler(self):
@@ -938,13 +1014,13 @@ class OmniDrawConfigMixin:
         try:
             result = await self._run_config_operation(self._save_page_config, new_config)
         except Exception as exc:
-            logger.error(f"[OmniDraw] 配置保存失败: {exc}", exc_info=True)
+            logger.error(f"[我能永远定格你] 配置保存失败: {exc}", exc_info=True)
             return jsonify({
                 "success": False,
                 "message": f"配置保存失败: {self._safe_plugin_error_message(exc)}",
             }), 400 if isinstance(exc, ValueError) else 500
 
-        logger.info(f"[OmniDraw] 配置已持久化并热重载: {self.config_path}")
+        logger.info(f"[我能永远定格你] 配置已持久化并热重载: {self.config_path}")
         return jsonify(result)
 
     def _save_page_config(self, new_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -983,7 +1059,7 @@ class OmniDrawConfigMixin:
                     try:
                         self._persist_config()
                     except Exception as rollback_exc:
-                        logger.error(f"[OmniDraw] 配置回滚持久化失败: {rollback_exc}", exc_info=True)
+                        logger.error(f"[我能永远定格你] 配置回滚持久化失败: {rollback_exc}", exc_info=True)
                 raise
             self._cleanup_persona_refs()
             return {"success": True, "message": "配置已保存，热重载生效。", "persona_refs": self._page_persona_refs()}
