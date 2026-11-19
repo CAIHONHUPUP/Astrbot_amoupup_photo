@@ -105,16 +105,10 @@ class ChainManager:
                 request_kwargs = self._apply_provider_defaults(provider_config, kwargs)
                 result = None
                 attempts = 4
+                provider = create_provider(provider_config, self.session)
                 for attempt in range(attempts):
-                    # 每次尝试单独开会话：连接超时 8s、用完即关。
-                    # 这台机器到 65536 的线路丢包 12%，共享连接池会把每次失败拖到 15s。
-                    session = aiohttp.ClientSession(
-                        timeout=aiohttp.ClientTimeout(total=300, connect=8, sock_connect=8,
-                                                      sock_read=300),
-                        connector=aiohttp.TCPConnector(force_close=True),
-                    )
+                    # 连接类抖动原地重试；4xx（权限/模型不存在）立刻降级。
                     try:
-                        provider = create_provider(provider_config, session)
                         result = await provider.generate_image(prompt, **request_kwargs)
                         break
                     except Exception as _exc:
@@ -125,8 +119,6 @@ class ChainManager:
                             "⚠️ [Chain] 节点 [%s] 连接抖动（%s），%.1fs 后重试 %d/%d",
                             provider_id, type(_exc).__name__, wait, attempt + 1, attempts - 1)
                         await asyncio.sleep(wait)
-                    finally:
-                        await session.close()
                 logger.info(f"✅ [Chain] 节点 [{provider_id}] 创作成功！")
                 return ChainRunResult(
                     image_url=result,

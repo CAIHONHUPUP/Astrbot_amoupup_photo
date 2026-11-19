@@ -28,6 +28,7 @@ if "astrbot" not in sys.modules:
 
 from core.negative_prompt import (  # noqa: E402
     DEFAULT_BASE,
+    EXTRA_BASE,
     DEFAULT_ITEM,
     DEFAULT_ROOM,
     get_negative_prompt,
@@ -53,7 +54,7 @@ class ComposeTests(unittest.TestCase):
 
     def test_default_only_base(self):
         text = get_negative_prompt({}, prompt="一只猫在窗台")
-        self.assertEqual(text, DEFAULT_BASE)
+        self.assertEqual(text, DEFAULT_BASE + ", " + EXTRA_BASE)
 
     def test_scene_type_of(self):
         self.assertEqual(scene_type_of("卧室场景"), "room")
@@ -71,11 +72,13 @@ class ComposeTests(unittest.TestCase):
 
     def test_custom_config_values(self):
         cfg = {"base_negative": "低画质", "room_negative": "地板悬空", "item_negative": "穿模"}
-        self.assertEqual(get_negative_prompt(cfg, prompt="房间"), "低画质, 地板悬空")
+        self.assertEqual(get_negative_prompt(cfg, prompt="房间"),
+                         "低画质, " + EXTRA_BASE + ", 地板悬空")
 
     def test_dedupe_tokens(self):
         cfg = {"base_negative": "水印, 模糊", "room_negative": "模糊, 拥挤"}
-        self.assertEqual(get_negative_prompt(cfg, prompt="房间"), "水印, 模糊, 拥挤")
+        self.assertEqual(get_negative_prompt(cfg, prompt="房间"),
+                         "水印, 模糊, " + EXTRA_BASE + ", 拥挤")
 
 
 class FallbackTests(unittest.TestCase):
