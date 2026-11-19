@@ -670,6 +670,7 @@ class OmniDrawTaskMixin:
         negative_prompt: str = "",
         skip_outfit_lock: bool = False,
         pose_ref: Any = None,
+        skip_selfie_template: bool = False,
     ) -> Dict[str, Any]:
         """Generate image(s) for another plugin and return serializable image data.
 
@@ -716,6 +717,7 @@ class OmniDrawTaskMixin:
                     allow_local_refs=allow_local_refs,
                     skip_outfit_lock=skip_outfit_lock,
                     pose_ref=pose_ref,
+                    skip_selfie_template=skip_selfie_template,
                 )
             else:
                 generation = await self._run_text2img_generation(

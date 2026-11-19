@@ -175,7 +175,7 @@ class PromptOptimizer:
     def __init__(self, config: PluginConfig):
         self.config = config
 
-    async def optimize(self, raw_action: str, count: int = 1, session: Optional[aiohttp.ClientSession] = None, has_reference: bool = False, selfie: bool = False, external_camera: bool = False, locked_outfit: str = "", scene_lock: str = "", pose_lock: str = "") -> list:
+    async def optimize(self, raw_action: str, count: int = 1, session: Optional[aiohttp.ClientSession] = None, has_reference: bool = False, selfie: bool = False, external_camera: bool = False, locked_outfit: str = "", scene_lock: str = "", pose_lock: str = "", skip_selfie_template: bool = False) -> list:
         style_choice = getattr(self.config, "optimizer_style", "手机日常原生感")
         custom_prompt = getattr(self.config, "optimizer_custom_prompt", "").strip()
         try:
@@ -211,7 +211,7 @@ class PromptOptimizer:
 
         style_data, _ref_rule, _scene_lock, _pose_lock = self._apply_reference_rules(
             style_data, has_reference, selfie, external_camera, locked_outfit, scene_lock, pose_lock,
-            raw_action=raw_action,
+            raw_action=raw_action, skip_selfie_template=skip_selfie_template,
         )
         sys_prompt = self._build_system_prompt(style_data, _ref_rule, count, _quality_guardrails)
 
@@ -360,7 +360,7 @@ class PromptOptimizer:
             style_data = STYLE_PRESETS.get(style_choice, STYLE_PRESETS["手机日常原生感"])
         return style_data, universal_quality_guardrails
 
-    def _apply_reference_rules(self, style_data: dict, has_reference: bool, selfie: bool, external_camera: bool, locked_outfit: str, scene_lock: str, pose_lock: str, raw_action: str = ""):
+    def _apply_reference_rules(self, style_data: dict, has_reference: bool, selfie: bool, external_camera: bool, locked_outfit: str, scene_lock: str, pose_lock: str, raw_action: str = "", skip_selfie_template: bool = False):
         """叠加参考图、自拍/他拍、今日穿搭与场景/姿势锁规则。"""
         # B2c：action 自己点名了衣服，OUTFIT LOCK 必须让位；只锁没点名的默认场景。
         if locked_outfit and action_names_outfit(raw_action):
@@ -420,7 +420,7 @@ class PromptOptimizer:
                 )
 
         # [patched] 自拍模式：自拍镜头的物理限制，禁止全身/第三人视角
-        if selfie:
+        if selfie and not skip_selfie_template:
             _ref_rule += (
                 "\n8. SELFIE MODE: this image is a front-facing phone selfie taken by the character herself, "
                 "camera held at arm's length. Frame at most from head to thighs — a selfie camera cannot capture "
@@ -429,6 +429,20 @@ class PromptOptimizer:
                 "and never imply that someone else is holding the camera. "
                 "If the user asked for a full-body shot, keep it a normal selfie framing instead "
                 "and do not invent a photographer."
+            )
+        elif skip_selfie_template:
+            style_data = dict(style_data)
+            style_data["camera"] = (
+                "low-angle close-up shot of bare feet and lower legs, camera held near knee height "
+                "or resting on the desk/floor, not at arm's length in front of the face, no face in frame"
+            )
+            _ref_rule += (
+                "\n8. FOOT CLOSE-UP MODE: this image is a low-angle foot shot, NOT a face-level selfie. "
+                "The camera sits near the feet (knee height or lower), pointing at the feet; frame only "
+                "the lower legs and bare feet. Do NOT show her face, do NOT show a phone held up in "
+                "front of her face, and do NOT apply head-to-thighs selfie framing. Both feet rest "
+                "naturally with toes visible; do not force both soles toward the lens unless the user "
+                "explicitly asked for soles. Bare feet are allowed in any location."
             )
         # [patched] 明确由别人/三脚架持机：允许全身，且不要画成自己举手机
         elif external_camera:

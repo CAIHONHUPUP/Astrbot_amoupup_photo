@@ -397,6 +397,7 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
         allow_local_refs: bool = False,
         skip_outfit_lock: bool = False,
         pose_ref: Any = None,
+        skip_selfie_template: bool = False,
     ) -> Dict[str, Any]:
         request_options = self._image_request_options(extra_params, aspect_ratio, size, use_gif, frame_count, frame_duration_ms)
         gif_requested = is_gif_request(request_options)
@@ -414,6 +415,7 @@ class OmniDrawPlugin(OmniDrawConfigMixin, OmniDrawCommandMixin, OmniDrawTaskMixi
                     external_camera=_has_external_camera,
                     locked_outfit=locked_outfit,
                     scene_lock=scene_lock, pose_lock=pose_lock,
+                    skip_selfie_template=skip_selfie_template,
                 )
                 optimized_actions = self._normalize_plugin_prompts(optimized_actions, fallback_action, count)
                 safe_refs = await self._process_and_save_images(
