@@ -425,6 +425,8 @@ class OmniDrawCommandMixin:
             quota_error, reserved_count = self._reserve_image_quota(event, count)
             if quota_error:
                 return quota_error
+            _mid = str(getattr(getattr(event, "message_obj", None), "message_id", "") or "")
+            self._attempt_turn = _mid or str(id(event))
             generation = await self._run_selfie_generation(
                 event,
                 action,

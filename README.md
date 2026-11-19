@@ -3,7 +3,7 @@
 > **我能永远定格你**（独立生图插件，AstrBot v4）：文生图、图生图、人设自拍、GIF 动图、视频生成一站搞定。
 > **与 amo（Astrbot_amoupup_forever）只做握手接入，不进入 amo 代码库。**
 
-- 当前版本：**3.6.0**（[更新日志](CHANGELOG.md#360)）
+- 当前版本：**3.6.1**（[更新日志](CHANGELOG.md#361)）
 - 插件 id：`Astrbot_amoupup_photo`
 - 作者：彩虹upup
 - 跑测试：`pytest tests -q`（插件根目录放 PYTHONPATH）
@@ -38,7 +38,7 @@
    https://github.com/CAIHONHUPUP/Astrbot_amoupup_photo/
    ```
 
-2. 重启 core 或重载插件，日志出现「我能永远定格你 v3.6.0」即加载成功。
+2. 重启 core 或重载插件，日志出现「我能永远定格你 v3.6.1」即加载成功。
 3. 打开配置页填入画图模型（OpenAI / Gemini / 自定义端点均可），保存。
 
 插件元数据声明支持 AstrBot `>=4.16,<5`；本轮部署验证使用 AstrBot `4.29.1` / Python `3.12.15`，不代表已逐一验证所有旧版宿主。运行依赖见 `requirements.txt`；配置页已附带构建资源，安装和升级都不需要 Node.js。

@@ -1,5 +1,6 @@
 """兜底链路调度器。"""
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -10,6 +11,16 @@ from ..constants import APIType
 from ..models import PluginConfig
 from ..providers import create_provider
 from .image_options import is_gif_request, normalize_gif_options, provider_supports_gif
+
+
+#: 连接类抖动（对面 TLS 握手偶发卡住）值得原地重试，HTTP 4xx 不值得。
+def is_transient_error(exc) -> bool:
+    name = type(exc).__name__
+    text = str(exc)
+    if any(key in name for key in ("ClientConnectorError", "ClientOSError",
+                                   "ServerTimeoutError", "TimeoutError")):
+        return True
+    return any(key in text for key in ("信号灯超时", "Cannot connect", "timed out", "Timeout"))
 
 
 @dataclass(frozen=True)
@@ -91,9 +102,31 @@ class ChainManager:
 
             logger.info(f"🚀 [Chain] 正在将任务交由节点 [{provider_id}] 处理...")
             try:
-                provider = create_provider(provider_config, self.session)
                 request_kwargs = self._apply_provider_defaults(provider_config, kwargs)
-                result = await provider.generate_image(prompt, **request_kwargs)
+                result = None
+                attempts = 4
+                for attempt in range(attempts):
+                    # 每次尝试单独开会话：连接超时 8s、用完即关。
+                    # 这台机器到 65536 的线路丢包 12%，共享连接池会把每次失败拖到 15s。
+                    session = aiohttp.ClientSession(
+                        timeout=aiohttp.ClientTimeout(total=300, connect=8, sock_connect=8,
+                                                      sock_read=300),
+                        connector=aiohttp.TCPConnector(force_close=True),
+                    )
+                    try:
+                        provider = create_provider(provider_config, session)
+                        result = await provider.generate_image(prompt, **request_kwargs)
+                        break
+                    except Exception as _exc:
+                        if attempt + 1 >= attempts or not is_transient_error(_exc):
+                            raise
+                        wait = 1.0 * (attempt + 1)
+                        logger.warning(
+                            "⚠️ [Chain] 节点 [%s] 连接抖动（%s），%.1fs 后重试 %d/%d",
+                            provider_id, type(_exc).__name__, wait, attempt + 1, attempts - 1)
+                        await asyncio.sleep(wait)
+                    finally:
+                        await session.close()
                 logger.info(f"✅ [Chain] 节点 [{provider_id}] 创作成功！")
                 return ChainRunResult(
                     image_url=result,

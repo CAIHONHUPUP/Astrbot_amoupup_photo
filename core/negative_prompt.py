@@ -11,6 +11,11 @@
 from __future__ import annotations
 
 DEFAULT_BASE = "人物, 人类, 文字, 水印, 签名, 畸形, 多余的肢体, 模糊, 低画质"
+
+#: 2026-11-19：写死在代码里，配置被插件回写也不会丢。
+#: 手脚解剖（五趾、脚趾大小递减）与「自拍变第三人称」的常见崩法。
+EXTRA_BASE = ("多趾, 六趾, 脚趾粘连, 脚趾畸形, 多指, 手指畸形, 脚趾一样大, 五趾等大, "
+              "手机背面, 后置摄像头, 第三人称视角, 全身远景, 三脚架, 别人拍的")
 DEFAULT_ROOM = "拥挤, 杂乱无章, 地板悬空, 墙壁破损"
 DEFAULT_ITEM = "穿模, 不对称, 背景杂乱"
 
@@ -53,7 +58,7 @@ def get_negative_prompt(config, scene_type="", prompt=""):
         # 自拍画面里本来就只有她，负面词不能再压“人物/人类”
         base = ",".join(token.strip() for token in base.replace("，", ",").split(",")
                         if token.strip() not in ("人物", "人类"))
-    parts = [base]
+    parts = [base, EXTRA_BASE]
     if scene == "room":
         parts.append(_value(config, "room_negative", DEFAULT_ROOM))
     elif scene == "item":

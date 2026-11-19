@@ -422,7 +422,12 @@ class PromptOptimizer:
         # [patched] 自拍模式：自拍镜头的物理限制，禁止全身/第三人视角
         if selfie and not skip_selfie_template:
             _ref_rule += (
-                "\n8. SELFIE MODE: this image is a front-facing phone selfie taken by the character herself, "
+                "\n8. SELFIE MODE: this image is the view through her own phone camera — if the lens were "
+                "her eyes, that is this framing. She is the one holding the phone, at arm's length, "
+                "and the picture must look like she snapped it herself. "
+                "The back of the phone and its rear camera lenses must NEVER be visible: if the phone "
+                "enters the frame, show only a thin edge or the screen side, never the lens array. "
+                "this image is a front-facing phone selfie taken by the character herself, "
                 "camera held at arm's length. Frame at most from head to thighs — a selfie camera cannot capture "
                 "a full body from head to shoes, so never write a full-body framing. "
                 "Do NOT show the phone from behind or from a third-person angle, "
