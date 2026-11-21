@@ -1,0 +1,8 @@
+name: Astrbot_amoupup_photo
+display_name: 我能永远定格你
+desc: 轻快生图插件，文生图、图生图、自拍、视频一站搞定。
+help: 发送 /定格帮助 查看说明（旧名 /万象帮助 仍可用）
+version: 3.6.1
+author: 彩虹upup
+repo: https://github.com/CAIHONHUPUP/Astrbot_amoupup_photo
+astrbot_version: ">=4.16,<5"

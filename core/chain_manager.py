@@ -1,0 +1,143 @@
+"""兜底链路调度器。"""
+
+import asyncio
+import time
+from dataclasses import dataclass
+from typing import Any
+
+import aiohttp
+from astrbot.api import logger
+from ..constants import APIType
+from ..models import PluginConfig
+from ..providers import create_provider
+from .image_options import is_gif_request, normalize_gif_options, provider_supports_gif
+
+
+#: 连接类抖动（对面 TLS 握手偶发卡住）值得原地重试，HTTP 4xx 不值得。
+def is_transient_error(exc) -> bool:
+    name = type(exc).__name__
+    text = str(exc)
+    if any(key in name for key in ("ClientConnectorError", "ClientOSError",
+                                   "ServerTimeoutError", "TimeoutError")):
+        return True
+    return any(key in text for key in ("信号灯超时", "Cannot connect", "timed out", "Timeout"))
+
+
+@dataclass(frozen=True)
+class ChainRunResult:
+    image_url: str
+    provider_id: str
+    model: str
+    elapsed_seconds: float
+    output_format: str = ""
+
+
+class ChainManager:
+    def __init__(self, config: PluginConfig, session: aiohttp.ClientSession):
+        self.config = config
+        self.session = session
+
+    async def run_chain(self, chain_name: str, prompt: str, **kwargs: Any) -> str:
+        result = await self.run_chain_with_metadata(chain_name, prompt, **kwargs)
+        return result.image_url
+
+    def _effective_request_model(self, default_model: str, kwargs: Any) -> str:
+        override = kwargs.get("model") if isinstance(kwargs, dict) else None
+        return str(override or default_model or "").strip()
+
+    def _apply_provider_defaults(self, provider_config: Any, kwargs: Any) -> dict:
+        request_kwargs = dict(kwargs or {})
+        if is_gif_request(request_kwargs):
+            # Static default sizes can exceed the separate GIF frame/pixel budget.
+            return normalize_gif_options(request_kwargs)
+        if str(request_kwargs.get("size", "") or "").strip():
+            return request_kwargs
+        if str(request_kwargs.get("resolution", "") or "").strip():
+            return request_kwargs
+
+        default_size = str(getattr(provider_config, "default_size", "") or "").strip()
+        if default_size:
+            request_kwargs["size"] = default_size
+        return request_kwargs
+
+    async def run_chain_with_metadata(self, chain_name: str, prompt: str, **kwargs: Any) -> ChainRunResult:
+        kwargs = normalize_gif_options(kwargs)
+        gif_requested = is_gif_request(kwargs)
+        raw_chain = self.config.chains.get(chain_name)
+        chain = []
+        seen = set()
+        for provider_id in raw_chain or []:
+            provider_id = str(provider_id).strip()
+            if provider_id and provider_id not in seen:
+                seen.add(provider_id)
+                chain.append(provider_id)
+        if not chain:
+            raise ValueError(f"未找到链路配置: {chain_name}")
+
+        last_error = None
+        skipped_errors = []
+        start_time = time.perf_counter()
+
+        for provider_id in chain:
+            provider_config = self.config.get_provider(provider_id)
+            if not provider_config:
+                skipped_errors.append(f"{provider_id}: 节点不存在")
+                logger.warning(f"⚠️ 链路 [{chain_name}] 中的节点 [{provider_id}] 不存在。")
+                continue
+            if gif_requested and not provider_supports_gif(provider_config):
+                skipped_errors.append(f"{provider_id}: GIF 需要 gpt-image-2.6-sunburst/flare 的 Images API 节点")
+                logger.warning(f"GIF 链路跳过不支持动图的节点 [{provider_id}]，不会降级为静态图。")
+                continue
+            if (
+                (not provider_config.base_url or not provider_config.model)
+                and provider_config.api_type != APIType.GEMINI_OFFICIAL
+            ):
+                skipped_errors.append(f"{provider_id}: 缺少接口地址或模型")
+                logger.warning(f"⚠️ 链路 [{chain_name}] 中的节点 [{provider_id}] 缺少接口地址或模型。")
+                continue
+            if not provider_config.has_api_key:
+                skipped_errors.append(f"{provider_id}: 未配置 API Key")
+                logger.warning(f"⚠️ 链路 [{chain_name}] 中的节点 [{provider_id}] 未配置 API Key。")
+                continue
+
+            logger.info(f"🚀 [Chain] 正在将任务交由节点 [{provider_id}] 处理...")
+            try:
+                request_kwargs = self._apply_provider_defaults(provider_config, kwargs)
+                result = None
+                attempts = 4
+                provider = create_provider(provider_config, self.session)
+                for attempt in range(attempts):
+                    # 连接类抖动原地重试；4xx（权限/模型不存在）立刻降级。
+                    try:
+                        result = await provider.generate_image(prompt, **request_kwargs)
+                        break
+                    except Exception as _exc:
+                        if attempt + 1 >= attempts or not is_transient_error(_exc):
+                            raise
+                        wait = 1.0 * (attempt + 1)
+                        logger.warning(
+                            "⚠️ [Chain] 节点 [%s] 连接抖动（%s），%.1fs 后重试 %d/%d",
+                            provider_id, type(_exc).__name__, wait, attempt + 1, attempts - 1)
+                        await asyncio.sleep(wait)
+                logger.info(f"✅ [Chain] 节点 [{provider_id}] 创作成功！")
+                return ChainRunResult(
+                    image_url=result,
+                    provider_id=provider_id,
+                    model=(
+                        provider_config.model if gif_requested
+                        else self._effective_request_model(provider_config.model, request_kwargs)
+                    ),
+                    elapsed_seconds=time.perf_counter() - start_time,
+                    output_format="gif" if gif_requested else "",
+                )
+
+            except Exception as e:
+                # 增强日志捕获
+                error_detail = repr(e)
+                last_error = error_detail
+                logger.error(f"❌ [Chain] 节点 [{provider_id}] 发生异常: {error_detail}", exc_info=True)
+                logger.warning("🔄 正在尝试切换到下一个备用节点...")
+                continue
+
+        failure_detail = last_error or "；".join(skipped_errors) or "没有可尝试的有效节点"
+        raise RuntimeError(f"所有节点均已失败！最后一次报错内容: {failure_detail}")

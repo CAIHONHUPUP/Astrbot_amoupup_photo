@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.db
+*.db-wal
+*.db-shm
+*.log
+backups/
+data/
+plugin_data/
+temp_images/
+user_refs/
+.venv/
