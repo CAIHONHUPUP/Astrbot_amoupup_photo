@@ -10,6 +10,9 @@ htmlcov/
 *.log
 backups/
 data/
+# CI 需要 tests/data 下的 golden；只放行这个目录
+!tests/data/
+!tests/data/*.json
 plugin_data/
 temp_images/
 user_refs/
