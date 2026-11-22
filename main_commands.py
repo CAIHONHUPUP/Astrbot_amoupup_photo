@@ -79,6 +79,23 @@ if TYPE_CHECKING:
     from .models import PluginConfig
 
 
+#: 跨插件生图 principal 契约（task-27，photo 侧）
+#: 能陪/守护调用 generate_images_for_plugin 时必须带 principal；event 为空时也校验：
+#: - caller 必须在受信插件名单内（本进程内跨插件调用，防的是误调用/坏形状）；
+#: - kind=owner 走与命令路径同一套权限+每日配额+用量记账；
+#: - kind=system 是系统内部生成（参考图/房间图），不占个人配额、不计“她的今日生图”。
+PLUGIN_PRINCIPAL_CONTRACT = "amo-image-principal"
+PLUGIN_PRINCIPAL_VERSION = 1
+PLUGIN_PRINCIPAL_KINDS = ("owner", "system")
+TRUSTED_PLUGIN_CALLERS = (
+    "Astrbot_amoupup_forever",
+    "Astrbot_amoupup_watch",
+    "Astrbot_amoupup_data",
+)
+#: 权限失败时的“能说出口”的话：不出现权限/配额/配额不足/event 等工程词
+PLUGIN_PRINCIPAL_SAFE_DENY = "这个只给老公看哦。"
+
+
 class OmniDrawCommandMixin:
     """命令层：指令入口、权限与配额判定、命令文案与预设。"""
 
@@ -920,6 +937,112 @@ class OmniDrawCommandMixin:
             return f"{MessageEmoji.WARNING} 当前仅允许可使用人员白名单内用户使用「我能永远定格你」。"
         return f"{MessageEmoji.WARNING} 你已被加入用户黑名单，无法使用「我能永远定格你」。"
 
+    def _normalize_plugin_principal(self, principal: Any) -> Optional[Dict[str, Any]]:
+        """跨插件 principal -> 与 event 同形状的 access status；坏形状返回 None。
+
+        约定见模块常量 PLUGIN_PRINCIPAL_*；调用方（能陪）传：
+        {contract, version, caller, kind, user_id, scope, umo}
+        """
+        if not isinstance(principal, dict):
+            return None
+        caller = str(principal.get("caller") or "").strip()
+        kind = str(principal.get("kind") or "").strip().lower()
+        if caller not in TRUSTED_PLUGIN_CALLERS or kind not in PLUGIN_PRINCIPAL_KINDS:
+            return None
+        user_id = str(principal.get("user_id") or "").strip() or ("%s:owner" % caller)
+        status = {
+            "user_id": user_id,
+            "group_id": str(principal.get("group_id") or "").strip(),
+            "allowed": True,
+            "unlimited": kind == "system",
+            "level": "plugin_" + kind,
+            "reason": "",
+            "caller": caller,
+            "kind": kind,
+            "contract": str(principal.get("contract") or ""),
+            "principal": dict(principal),
+        }
+        blocked_users = self._config_id_set(getattr(self.plugin_config, "blocked_users", []))
+        if user_id in blocked_users:
+            status.update({"allowed": False, "level": "blocked_user", "reason": "用户黑名单"})
+        return status
+
+    def _plugin_legacy_status(self) -> Dict[str, Any]:
+        """旧版调用方（无 event 也无 principal）：放行但打标，用量记到 unattributed。
+
+        这是滚动升级期的过渡：旧能陪还会 record_usage=True 但不带 principal，
+        这里至少把图计入面板（修 11-22 面板停在 11-21），并把 contract_miss 记账，
+        面板/健康项可见；新能陪（photo_generate.py）已改为带 principal 走完整校验。
+        """
+        return {
+            "user_id": "", "group_id": "", "allowed": True, "unlimited": True,
+            "level": "legacy_system", "reason": "missing principal", "legacy": True,
+            "caller": "", "kind": "", "contract": "",
+        }
+
+    def _plugin_principal_status(self, principal: Any, event: Any = None) -> Optional[Dict[str, Any]]:
+        """生图入口的 access status：event 优先，其次 principal；都没有返回 None。"""
+        if event is not None:
+            return self._access_status(event)
+        return self._normalize_plugin_principal(principal)
+
+    def _resolve_plugin_access(self, event: Any, principal: Any):
+        """生图入口统一解析：返回 (access_status, record_source, contract_error)。
+
+        - event 优先（命令/工具路径，原有权限判定不变）；
+        - event=None 时 principal 必须合法（owner：权限+配额+用量；system：内部生成）；
+        - 都没有 = 旧版调用：放行但打标、计 contract_miss（滚动升级期，面板可见）。
+        """
+        if event is not None:
+            return self._access_status(event), "event", ""
+        if principal is not None:
+            status = self._normalize_plugin_principal(principal)
+            if status is None:
+                return None, "", PLUGIN_PRINCIPAL_SAFE_DENY
+            return status, "plugin", ""
+        self._notice_contract("contract_miss", "generate_images_for_plugin")
+        return self._plugin_legacy_status(), "legacy", ""
+
+    def _with_usage_contract(self, response: Any, access: Any, usage_recorded: bool,
+                             record_source: str = "") -> Dict[str, Any]:
+        """给生图结果补契约字段：调用方据此判断权限/配额/用量是否真的走了。"""
+        data = dict(response) if isinstance(response, dict) else {"success": False, "images": []}
+        data["usage_recorded"] = bool(usage_recorded)
+        data["contract"] = PLUGIN_PRINCIPAL_CONTRACT
+        data["principal"] = {
+            "caller": str((access or {}).get("caller") or ""),
+            "kind": str((access or {}).get("kind") or ""),
+            "level": str((access or {}).get("level") or ""),
+            "user_id": str((access or {}).get("user_id") or ""),
+            "source": str(record_source or ""),
+        }
+        return data
+
+    def _ensure_usage_runtime(self) -> None:
+        """测试桩/老实例可能没在 __init__ 里建 usage 设施：按需补齐（幂等）。"""
+        if not hasattr(self, "_usage_lock"):
+            import threading
+            self._usage_lock = threading.RLock()
+        if not hasattr(self, "_usage_stats"):
+            self._usage_stats = {}
+        if not hasattr(self, "_quota_reservations"):
+            self._quota_reservations = {}
+
+    def _notice_contract(self, key: str = "contract_miss", where: str = "") -> None:
+        """跨插件契约缺口计数（不写日志洪水）：面板 + /status 可见。"""
+        key = str(key or "contract_miss")
+        try:
+            self._ensure_usage_runtime()
+            with self._usage_lock:
+                stats = self._normalize_usage_stats(self._usage_stats)
+                stats[key] = self._to_nonnegative_int(stats.get(key, 0)) + 1
+                if key == "contract_miss" and where:
+                    stats["contract_miss_last"] = str(where)[:64]
+                self._usage_stats = stats
+                self._persist_usage_stats()
+        except Exception as exc:  # 计数失败不影响生图
+            logger.warning(f"[我能永远定格你] 契约计数失败: {exc}")
+
     def _get_event_text(self, event: AstrMessageEvent) -> str:
         text = getattr(event, "message_str", "") or getattr(getattr(event, "message_obj", None), "message_str", "")
         if text:
@@ -938,19 +1061,25 @@ class OmniDrawCommandMixin:
         return max(1, configured_limit)
 
     def _image_quota_state(self, event: AstrMessageEvent) -> Dict[str, Any]:
-        status = self._access_status(event)
+        return self._status_quota_state(self._access_status(event))
+
+    def _status_quota_state(self, status: Dict[str, Any]) -> Dict[str, Any]:
+        """配额状态：event 与跨插件 principal 收敛成同一个 access status 后再算。"""
+        self._ensure_usage_runtime()
+        status = dict(status or {})
         limit = self._daily_image_limit()
-        user_id = status.get("user_id") or self._get_event_user_id(event)
+        user_id = str(status.get("user_id") or "")
         with self._usage_lock:
             stats = self._normalize_usage_stats(self._usage_stats)
             self._usage_stats = stats
-            record = stats.get("users", {}).get(user_id, {})
+            record = stats.get("users", {}).get(user_id, {}) if user_id else {}
             used = self._to_nonnegative_int(record.get("count", 0))
             bonus = self._to_nonnegative_int(record.get("bonus", 0))
             reserved = self._to_nonnegative_int(self._quota_reservations.get(user_id, 0))
         effective_limit = 0 if status.get("unlimited") or limit <= 0 else limit + bonus
         return {
             **status,
+            "user_id": user_id,
             "base_limit": limit,
             "bonus": bonus,
             "effective_limit": effective_limit,
@@ -960,40 +1089,67 @@ class OmniDrawCommandMixin:
             "checkin_at": self._to_nonnegative_int(record.get("checkin_at", 0)),
         }
 
-    def _reserve_image_quota(self, event: AstrMessageEvent, requested_count: int) -> Tuple[str, int]:
+    def _reserve_status_quota(self, status: Dict[str, Any], requested_count: int) -> Tuple[str, int]:
+        """按 access status 预留配额；event / principal / legacy 三条入口共用。"""
         requested_count = max(1, self._to_nonnegative_int(requested_count, 1))
+        quota = self._status_quota_state(status)
+        if not quota.get("allowed", True):
+            return str(quota.get("reason") or "forbidden"), 0
+        if quota.get("unlimited") or quota.get("base_limit", 0) <= 0:
+            return "", 0
+        user_id = str(quota.get("user_id") or "")
+        if not user_id:
+            return "", 0
+        used = self._to_nonnegative_int(quota.get("used", 0))
+        reserved = self._to_nonnegative_int(quota.get("reserved", 0))
+        effective_limit = self._to_nonnegative_int(quota.get("effective_limit", 0))
+        if used + reserved + requested_count > effective_limit:
+            return self._quota_short_message(quota, requested_count), 0
         with self._usage_lock:
-            status = self._access_status(event, refresh=False)
-            if not status.get("allowed", True):
-                return self._permission_denied_message(event), 0
-            limit = self._daily_image_limit()
-            if status.get("unlimited") or limit <= 0:
-                return "", 0
-            user_id = status.get("user_id") or self._get_event_user_id(event)
-            stats = self._normalize_usage_stats(self._usage_stats)
-            self._usage_stats = stats
-            record = stats.get("users", {}).get(user_id, {})
-            used = self._to_nonnegative_int(record.get("count", 0))
-            bonus = self._to_nonnegative_int(record.get("bonus", 0))
-            effective_limit = limit + bonus
-            reserved = self._to_nonnegative_int(self._quota_reservations.get(user_id, 0))
-            if used + reserved + requested_count > effective_limit:
-                remaining = max(0, effective_limit - used - reserved)
-                limit_text = f"{effective_limit} 张"
-                if bonus:
-                    limit_text = f"{effective_limit} 张（基础 {limit} + 签到 {bonus}）"
-                return (
-                    f"{MessageEmoji.WARNING} 今日生图额度不足：你已使用 {used}/{limit_text}，"
-                    f"本次需要 {requested_count} 张，剩余 {remaining} 张。",
-                    0,
-                )
-            self._quota_reservations[user_id] = reserved + requested_count
-            return "", requested_count
+            current = self._to_nonnegative_int(self._quota_reservations.get(user_id, 0))
+            self._quota_reservations[user_id] = current + requested_count
+        return "", requested_count
 
-    def _release_image_quota(self, event: AstrMessageEvent, reserved_count: int) -> None:
+    def _quota_short_message(self, quota: Dict[str, Any], requested_count: int = 1) -> str:
+        used = self._to_nonnegative_int(quota.get("used", 0))
+        base_limit = self._to_nonnegative_int(quota.get("base_limit", 0))
+        bonus = self._to_nonnegative_int(quota.get("bonus", 0))
+        effective_limit = self._to_nonnegative_int(quota.get("effective_limit", base_limit))
+        reserved = self._to_nonnegative_int(quota.get("reserved", 0))
+        remaining = max(0, effective_limit - used - reserved)
+        limit_text = f"{effective_limit} 张"
+        if bonus:
+            limit_text = f"{effective_limit} 张（基础 {base_limit} + 签到 {bonus}）"
+        return (
+            f"{MessageEmoji.WARNING} 今日生图额度不足：你已使用 {used}/{limit_text}，"
+            f"本次需要 {requested_count} 张，剩余 {remaining} 张。"
+        )
+
+    def _release_quota_for(self, event: Any, access: Dict[str, Any], reserved_count: int) -> None:
+        """统一释放：event 路径走原有 hook（可被测试替换），principal 路径直接释放。"""
+        if not reserved_count:
+            return
+        if event is not None:
+            self._release_image_quota(event, reserved_count)
+        else:
+            self._release_status_quota(access, reserved_count)
+
+    def _reserve_image_quota(self, event: AstrMessageEvent, requested_count: int) -> Tuple[str, int]:
+        status = self._access_status(event, refresh=False)
+        if not status.get("allowed", True):
+            return self._permission_denied_message(event), 0
+        return self._reserve_status_quota(status, requested_count)
+
+    def _release_status_quota(self, status: Dict[str, Any], reserved_count: int) -> None:
+        if reserved_count is None or str((status or {}).get("user_id") or "") == "":
+            return
+        self._ensure_usage_runtime()
+        reserved_count = max(0, self._to_nonnegative_int(reserved_count, 0))
         if reserved_count <= 0:
             return
-        user_id = self._access_status(event, refresh=False).get("user_id") or self._get_event_user_id(event)
+        user_id = str((status or {}).get("user_id") or "")
+        if not user_id:
+            return
         with self._usage_lock:
             current = self._to_nonnegative_int(self._quota_reservations.get(user_id, 0))
             remaining = max(0, current - reserved_count)
@@ -1002,21 +1158,38 @@ class OmniDrawCommandMixin:
             else:
                 self._quota_reservations.pop(user_id, None)
 
+    def _release_image_quota(self, event: AstrMessageEvent, reserved_count: int) -> None:
+        self._release_status_quota(self._access_status(event, refresh=False), reserved_count)
+
+    def _finalize_status_quota(
+        self,
+        status: Dict[str, Any],
+        reserved_count: int,
+        actual_count: int,
+        source: str = "event",
+    ) -> None:
+        """结算预留：先释放，再按实际出图张数计入 usage（source=event/plugin/legacy）。"""
+        self._ensure_usage_runtime()
+        user_id = str((status or {}).get("user_id") or "")
+        reserved_count = max(0, self._to_nonnegative_int(reserved_count, 0))
+        with self._usage_lock:
+            if reserved_count and user_id:
+                current = self._to_nonnegative_int(self._quota_reservations.get(user_id, 0))
+                remaining = max(0, current - reserved_count)
+                if remaining:
+                    self._quota_reservations[user_id] = remaining
+                else:
+                    self._quota_reservations.pop(user_id, None)
+            self._record_status_images_locked(status, actual_count, source)
+
     def _finalize_image_quota(
         self,
         event: AstrMessageEvent,
         reserved_count: int,
         actual_count: int,
     ) -> None:
-        user_id = self._access_status(event, refresh=False).get("user_id") or self._get_event_user_id(event)
-        with self._usage_lock:
-            current = self._to_nonnegative_int(self._quota_reservations.get(user_id, 0))
-            remaining = max(0, current - max(0, reserved_count))
-            if remaining:
-                self._quota_reservations[user_id] = remaining
-            else:
-                self._quota_reservations.pop(user_id, None)
-            self._record_generated_images_locked(event, actual_count)
+        self._finalize_status_quota(self._access_status(event, refresh=False),
+                                    reserved_count, actual_count, "event")
 
     def _complete_image_quota(
         self,
@@ -1029,43 +1202,48 @@ class OmniDrawCommandMixin:
         else:
             self._record_generated_images(event, actual_count)
 
-    def _image_quota_error_message(self, event: AstrMessageEvent, requested_count: int = 1) -> str:
-        quota = self._image_quota_state(event)
+    def _image_quota_error_for_status(self, status: Dict[str, Any], requested_count: int = 1) -> str:
+        """不预留、只检查：event 与 principal 共用。旧版内部调用没有身份，不查配额。"""
+        status = dict(status or {})
+        if status.get("legacy") or not str(status.get("user_id") or "").strip():
+            return ""
+        quota = self._status_quota_state(status)
         if not quota.get("allowed", True):
-            return self._permission_denied_message(event)
+            return str(quota.get("reason") or "forbidden")
         if quota.get("unlimited") or quota.get("base_limit", 0) <= 0:
             return ""
-
         requested_count = max(1, self._to_nonnegative_int(requested_count, 1))
-        used = quota.get("used", 0)
-        base_limit = quota.get("base_limit", 0)
-        bonus = quota.get("bonus", 0)
-        effective_limit = quota.get("effective_limit", base_limit)
-        remaining = max(0, effective_limit - used - quota.get("reserved", 0))
+        used = self._to_nonnegative_int(quota.get("used", 0))
+        effective_limit = self._to_nonnegative_int(quota.get("effective_limit", 0))
+        remaining = max(0, effective_limit - used - self._to_nonnegative_int(quota.get("reserved", 0)))
         if requested_count <= remaining:
             return ""
+        return self._quota_short_message(quota, requested_count)
 
-        limit_text = f"{effective_limit} 张"
-        if bonus:
-            limit_text = f"{effective_limit} 张（基础 {base_limit} + 签到 {bonus}）"
-        return (
-            f"{MessageEmoji.WARNING} 今日生图额度不足：你已使用 {used}/{limit_text}，"
-            f"本次需要 {requested_count} 张，剩余 {remaining} 张。"
-        )
+    def _image_quota_error_message(self, event: AstrMessageEvent, requested_count: int = 1) -> str:
+        status = self._access_status(event)
+        if not status.get("allowed", True):
+            return self._permission_denied_message(event)
+        return self._image_quota_error_for_status(status, requested_count)
 
-    def _record_generated_images(self, event: AstrMessageEvent, count: int = 1) -> None:
+    def _record_status_images(self, status: Dict[str, Any], count: int = 1, source: str = "event") -> None:
+        self._ensure_usage_runtime()
         count = self._to_nonnegative_int(count)
         if count <= 0:
             return
-
         with self._usage_lock:
-            self._record_generated_images_locked(event, count)
+            self._record_status_images_locked(status, count, source)
 
-    def _record_generated_images_locked(self, event: AstrMessageEvent, count: int = 1) -> None:
+    def _record_status_images_locked(self, status: Dict[str, Any], count: int = 1,
+                                     source: str = "event") -> None:
+        """按 access status 记用量；source 让面板能分“命令/跨插件/旧版”三条路径。"""
+        self._ensure_usage_runtime()
+        status = dict(status or {})
         stats = self._normalize_usage_stats(self._usage_stats)
         self._usage_stats = stats
-        status = self._access_status(event, refresh=False)
-        user_id = status.get("user_id") or self._get_event_user_id(event)
+        user_id = str(status.get("user_id") or "").strip()
+        if not user_id:
+            user_id = "legacy:unattributed" if str(source) == "legacy" else "unattributed"
         users = stats.setdefault("users", {})
         record = users.setdefault(
             user_id,
@@ -1077,14 +1255,26 @@ class OmniDrawCommandMixin:
         record["checkin_at"] = self._to_nonnegative_int(record.get("checkin_at", 0))
         record["last_at"] = int(time.time())
         record["access_level"] = str(status.get("level") or "limited")
-        group_id = status.get("group_id") or self._get_event_group_id(event)
+        record["source"] = str(source or "event")
+        group_id = status.get("group_id") or ""
         if group_id:
             record["group_id"] = group_id
-        display_name = self._get_event_user_label(event).strip()
+        display_name = str((status.get("principal") or {}).get("display_name") or "").strip()
+        if not display_name:
+            display_name = str(status.get("display_name") or "").strip()
         if display_name and display_name != user_id:
             record["display_name"] = display_name
         stats["total"] = sum(self._to_nonnegative_int(item.get("count", 0)) for item in users.values())
-        self._persist_usage_stats()
+        try:
+            self._persist_usage_stats()
+        except Exception as exc:  # 测试桩/数据目录不可写：内存计数仍然有效
+            logger.warning(f"[我能永远定格你] 生图统计保存失败: {exc}")
+
+    def _record_generated_images(self, event: AstrMessageEvent, count: int = 1) -> None:
+        self._record_status_images(self._access_status(event, refresh=False), count, "event")
+
+    def _record_generated_images_locked(self, event: AstrMessageEvent, count: int = 1) -> None:
+        self._record_status_images_locked(self._access_status(event, refresh=False), count, "event")
 
     def _extract_command_message(self, event: AstrMessageEvent, command: str, fallback: str = "") -> str:
         return self._extract_command_message_any(event, (command,), fallback)

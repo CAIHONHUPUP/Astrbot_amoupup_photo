@@ -197,17 +197,24 @@ class OmniDrawConfigMixin:
                 "checkin_at": checkin_at,
                 "last_at": self._to_nonnegative_int(record.get("last_at", 0)),
             }
-            for key in ("display_name", "group_id", "access_level"):
+            for key in ("display_name", "group_id", "access_level", "source"):
                 value = str(record.get(key, "")).strip()
                 if value:
                     normalized_record[key] = value
             normalized_users[user_id] = normalized_record
 
-        return {
+        # task-27：跨插件契约计数与“命令/插件/旧版”来源都要跨日保留结构（只重置为 0）
+        stats_out = {
             "date": today,
             "total": sum(record["count"] for record in normalized_users.values()),
             "users": normalized_users,
+            "contract_miss": self._to_nonnegative_int(stats.get("contract_miss", 0)),
+            "principal_denied": self._to_nonnegative_int(stats.get("principal_denied", 0)),
         }
+        last_miss = str(stats.get("contract_miss_last", "") or "").strip()
+        if last_miss:
+            stats_out["contract_miss_last"] = last_miss[:64]
+        return stats_out
 
     def _current_usage_stats(self) -> Dict[str, Any]:
         with self._usage_lock:
@@ -239,10 +246,18 @@ class OmniDrawConfigMixin:
             key=lambda item: (-self._to_nonnegative_int(item.get("count", 0)), str(item.get("user_id", ""))),
         )
         limit = self._daily_image_limit()
+        by_source: Dict[str, int] = {}
+        for record in users:
+            source = str(record.get("source") or "event")
+            by_source[source] = by_source.get(source, 0) + self._to_nonnegative_int(record.get("count", 0))
         return {
             "date": stats.get("date", self._today_key()),
             "total": stats.get("total", 0),
             "users": users,
+            "by_source": by_source,
+            "contract_miss": self._to_nonnegative_int(stats.get("contract_miss", 0)),
+            "principal_denied": self._to_nonnegative_int(stats.get("principal_denied", 0)),
+            "contract_miss_last": str(stats.get("contract_miss_last", "") or ""),
             "quota": {
                 "enabled": limit > 0,
                 "daily_limit": limit,

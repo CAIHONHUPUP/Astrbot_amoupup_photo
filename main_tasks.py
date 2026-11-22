@@ -75,6 +75,12 @@ else:
         )
 
 
+try:
+    from .main_commands import PLUGIN_PRINCIPAL_CONTRACT, PLUGIN_PRINCIPAL_SAFE_DENY
+except ImportError:  # 顶层导入（测试）
+    from main_commands import PLUGIN_PRINCIPAL_CONTRACT, PLUGIN_PRINCIPAL_SAFE_DENY
+
+
 if TYPE_CHECKING:
     from .models import PluginConfig
 
@@ -106,6 +112,16 @@ class OmniDrawTaskMixin:
     _release_image_quota: Callable[..., None]
     _finalize_image_quota: Callable[..., None]
     _record_generated_images: Callable[..., Any]
+    # task-27：event/principal 两条入口共用同一套权限/配额/用量
+    _resolve_plugin_access: Callable[..., Any]
+    _with_usage_contract: Callable[..., Any]
+    _notice_contract: Callable[..., None]
+    _reserve_status_quota: Callable[..., Any]
+    _release_quota_for: Callable[..., None]
+    _image_quota_error_for_status: Callable[..., str]
+    _release_status_quota: Callable[..., None]
+    _finalize_status_quota: Callable[..., None]
+    _record_status_images: Callable[..., Any]
 
     def _create_background_task(
         self,
@@ -661,6 +677,7 @@ class OmniDrawTaskMixin:
         mode: str = "",
         event: Optional[AstrMessageEvent] = None,
         record_usage: bool = False,
+        principal: Any = None,
         allow_local_refs: bool = False,
         use_gif: bool = False,
         frame_count: int = 9,
@@ -687,16 +704,34 @@ class OmniDrawTaskMixin:
         count = self._normalize_count(count)
         reserved_count = 0
         generation = {}
-        if event is not None:
-            permission_error = self._permission_denied_message(event)
-            if permission_error:
-                return {"success": False, "message": permission_error, "images": []}
-            if record_usage:
+        # task-27：权限/配额/用量不再绑定 event 是否存在。event=None 的跨插件自动
+        # 生图必须带 principal（能陪 photo_generate.py 已带 owner principal）；
+        # 无 event 无 principal 的旧版调用放行但打标 + 计数（滚动升级期）。
+        access, record_source, contract_error = self._resolve_plugin_access(event, principal)
+        if contract_error:
+            self._notice_contract("principal_denied", "generate_images_for_plugin")
+            return {"success": False, "message": contract_error, "user_safe": contract_error,
+                    "internal_reason": "invalid principal", "images": [],
+                    "usage_recorded": False, "contract": PLUGIN_PRINCIPAL_CONTRACT}
+        if not access.get("allowed", True):
+            denied = (self._permission_denied_message(event) if event is not None
+                      else PLUGIN_PRINCIPAL_SAFE_DENY)
+            self._notice_contract("principal_denied", "generate_images_for_plugin")
+            return {"success": False, "message": denied, "user_safe": denied,
+                    "internal_reason": str(access.get("reason") or ""), "images": [],
+                    "usage_recorded": False, "contract": PLUGIN_PRINCIPAL_CONTRACT}
+        if record_usage:
+            if event is not None:  # 保持命令路径原有 hook（_reserve_image_quota 可被测试/旧代码替换）
                 quota_error, reserved_count = self._reserve_image_quota(event, count)
             else:
-                quota_error = self._image_quota_error_message(event, count)
-            if quota_error:
-                return {"success": False, "message": quota_error, "images": []}
+                quota_error, reserved_count = self._reserve_status_quota(access, count)
+        else:
+            quota_error = (self._image_quota_error_message(event, count) if event is not None
+                           else self._image_quota_error_for_status(access, count))
+        if quota_error:
+            return {"success": False, "message": quota_error, "user_safe": quota_error,
+                    "images": [], "usage_recorded": False,
+                    "contract": PLUGIN_PRINCIPAL_CONTRACT}
 
         try:
             if generation_mode == "selfie":
@@ -739,23 +774,28 @@ class OmniDrawTaskMixin:
 
             response, valid_results = self._plugin_generation_response(generation)
             if not response.get("success"):
-                if event is not None and record_usage and reserved_count:
-                    self._release_image_quota(event, reserved_count)
-                return response
+                self._release_quota_for(event, access, reserved_count)
+                return self._with_usage_contract(response, access, False, record_source)
 
-            if event is not None and record_usage:
+            usage_recorded = False
+            if record_usage:
                 if reserved_count:
-                    self._finalize_image_quota(event, reserved_count, len(valid_results))
-                else:
+                    if event is not None:
+                        self._finalize_image_quota(event, reserved_count, len(valid_results))
+                    else:
+                        self._finalize_status_quota(access, reserved_count,
+                                                    len(valid_results), record_source)
+                elif event is not None:
                     self._record_generated_images(event, len(valid_results))
-            return response
+                else:
+                    self._record_status_images(access, len(valid_results), record_source)
+                usage_recorded = True
+            return self._with_usage_contract(response, access, usage_recorded, record_source)
         except asyncio.CancelledError:
-            if event is not None and record_usage and reserved_count:
-                self._release_image_quota(event, reserved_count)
+            self._release_quota_for(event, access, reserved_count)
             raise
         except Exception:
-            if event is not None and record_usage and reserved_count:
-                self._release_image_quota(event, reserved_count)
+            self._release_quota_for(event, access, reserved_count)
             raise
         finally:
             if generation.get("leased_result_paths"):

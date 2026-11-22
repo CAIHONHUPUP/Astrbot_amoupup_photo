@@ -2,6 +2,7 @@
 """参考图路径边界：插件 API 的本地图必须落在 data_dir 内（2026-11-16 审计用）。"""
 import pathlib
 import tempfile
+import threading
 import types
 import unittest
 
@@ -49,6 +50,10 @@ class EventImageLocalRootTest(unittest.IsolatedAsyncioTestCase):
         plugin = object.__new__(OmniDrawPlugin)
         plugin.data_dir = str(data_dir)
         plugin.plugin_config = types.SimpleNamespace(enable_size_limit_cleanup=False)
+        # cache-lease 功能（main_cache._leased_cache_paths）要求实例上有这把锁；
+        # 真实 __init__ 会建，object.__new__ 的测试桩这里补上。
+        plugin._cache_lease_lock = threading.RLock()
+        plugin._cache_leases = {}
         return plugin
 
     async def test_event_local_ref_outside_data_dir_is_dropped(self):
